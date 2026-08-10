@@ -286,7 +286,7 @@ export class TelegramNotifier {
     });
     const grants = accounts.flatMap((account) => this.store.listCreditGrantEvents(account.accountId, 5_000));
     const total = grants.reduce((sum, grant) => sum + grant.amount, 0);
-    await this.transport.sendMessage([
+    const message = [
       "💜 <b>AgentRouter alerts are ready</b>",
       "",
       ...rows,
@@ -294,7 +294,17 @@ export class TelegramNotifier {
       `<b>Confirmed grants:</b> ${grants.length} · ${money(total)}`,
       `<b>Rules:</b> grants · balance below ${money(this.config.telegram.lowBalanceUsd)} · drops of ${money(this.config.telegram.largeDropUsd)}+ · ${this.config.telegram.repeatedFailureCount} repeated failures`,
       `<a href="${escapeHtml(this.config.telegram.dashboardUrl)}">Open dashboard</a>`,
-    ].join("\n"));
+    ].join("\n");
+    const chartAccount = accounts.at(0);
+    if (chartAccount && this.config.telegram.graphsEnabled) {
+      await this.sendRich(
+        chartAccount.accountId,
+        `${chartAccount.label} · setup check`,
+        message,
+      );
+      return;
+    }
+    await this.transport.sendMessage(message);
   }
 
   private async processFailure(snapshot: RunSnapshot): Promise<void> {
