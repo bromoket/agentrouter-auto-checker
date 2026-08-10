@@ -58,7 +58,7 @@ function snapshot(
     dashboardMs: 500,
     totalMs: 5_000,
     summary: {},
-    metrics: { balance, consumed: 200 - balance },
+    metrics: { balance, consumed: 75 },
     usagePoints: [],
     apiCalls: [],
     loggedOut: true,
@@ -136,7 +136,43 @@ describe("TelegramNotifier", () => {
 
     const messages = telegram.calls.filter((call) => call.method === "sendMessage");
     expect(messages).toHaveLength(1);
-    expect(JSON.stringify(messages[0].body)).toContain("credit grant confirmed");
+    const payload = messages[0].body as { text: string };
+    expect(payload.text).toContain("Grant evidence and a balance increase");
+    expect(payload.text).toContain("Captured grant logs");
+    expect(payload.text).toContain("+$25.00");
+    expect(payload.text.length).toBeLessThanOrEqual(1_024);
+  });
+
+  test("alerts on a positive balance delta without claiming an unconfirmed grant", async () => {
+    const { store, telegram, appConfig } = await fixture();
+    store.saveRun(snapshot("2026-08-09T10:00:00.000Z", 100.88));
+    const notifier = await TelegramNotifier.create(appConfig, store, telegram.fetcher);
+
+    const increased = snapshot("2026-08-09T11:00:00.000Z", 367.88);
+    await notifier!.processRun(store.saveRun(increased), increased);
+
+    const messages = telegram.calls.filter((call) => call.method === "sendMessage");
+    expect(messages).toHaveLength(1);
+    const payload = messages[0].body as { text: string };
+    expect(payload.text).toContain("balance increased");
+    expect(payload.text).toContain("+$267.00");
+    expect(payload.text).toContain(
+      "observed balance increase, not a confirmed grant",
+    );
+    expect(payload.text.length).toBeLessThanOrEqual(1_024);
+  });
+
+  test("can replay a previously missed positive balance observation", async () => {
+    const { store, telegram, appConfig } = await fixture();
+    store.saveRun(snapshot("2026-08-09T10:00:00.000Z", 100));
+    const increased = snapshot("2026-08-09T11:00:00.000Z", 125);
+    const runId = store.saveRun(increased);
+    const notifier = await TelegramNotifier.create(appConfig, store, telegram.fetcher);
+
+    await notifier!.sendObservationAlert(runId);
+
+    const messages = telegram.calls.filter((call) => call.method === "sendMessage");
+    expect(messages).toHaveLength(1);
     expect(JSON.stringify(messages[0].body)).toContain("+$25.00");
   });
 

@@ -51,8 +51,8 @@ function escapeHtml(value: unknown): string {
 
 function money(value: number | null | undefined, signed = false): string {
   if (value === null || value === undefined || !Number.isFinite(value)) return "—";
-  const prefix = signed && value > 0 ? "+" : "";
-  return `${prefix}$${value.toFixed(2)}`;
+  const prefix = value < 0 ? "-" : signed && value > 0 ? "+" : "";
+  return `${prefix}$${Math.abs(value).toFixed(2)}`;
 }
 
 function elapsed(minutes: number | null): string {
@@ -265,9 +265,12 @@ export class TelegramNotifier {
       }
 
       await this.processRecovery(snapshot);
-      await this.processNewGrants();
       const observation = this.store.getCreditObservationForRun(runId);
-      if (observation) await this.processBalanceAlert(snapshot.accountLabel, observation);
+      await this.processFinancialNotifications(
+        runId,
+        snapshot.accountLabel,
+        observation,
+      );
     } catch (error) {
       console.error(`Telegram notification skipped: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
@@ -292,7 +295,7 @@ export class TelegramNotifier {
       ...rows,
       "",
       `<b>Confirmed grants:</b> ${grants.length} · ${money(total)}`,
-      `<b>Rules:</b> grants · balance below ${money(this.config.telegram.lowBalanceUsd)} · drops of ${money(this.config.telegram.largeDropUsd)}+ · ${this.config.telegram.repeatedFailureCount} repeated failures`,
+      `<b>Rules:</b> positive deltas · grants · balance below ${money(this.config.telegram.lowBalanceUsd)} · drops of ${money(this.config.telegram.largeDropUsd)}+ · ${this.config.telegram.repeatedFailureCount} repeated failures`,
       `<a href="${escapeHtml(this.config.telegram.dashboardUrl)}">Open dashboard</a>`,
     ].join("\n");
     const chartAccount = accounts.at(0);
@@ -305,6 +308,23 @@ export class TelegramNotifier {
       return;
     }
     await this.transport.sendMessage(message);
+  }
+
+  async sendObservationAlert(runId: number): Promise<void> {
+    if (!Number.isSafeInteger(runId) || runId <= 0) {
+      throw new Error("Telegram observation replay requires a positive run id.");
+    }
+    const observation = this.store.getCreditObservationForRun(runId);
+    if (!observation) throw new Error(`Run ${runId} has no verified credit observation.`);
+    const account = this.store
+      .listHistoricalAccounts()
+      .find((item) => item.accountId === observation.accountId);
+    const sent = await this.processBalanceAlert(
+      account?.label || observation.accountId,
+      observation,
+      [],
+    );
+    if (!sent) throw new Error(`Run ${runId} does not contain a material balance event.`);
   }
 
   private async processFailure(snapshot: RunSnapshot): Promise<void> {
@@ -352,56 +372,106 @@ export class TelegramNotifier {
     await this.stateStore.save(this.state);
   }
 
-  private async processNewGrants(): Promise<void> {
+  private async processFinancialNotifications(
+    runId: number,
+    label: string,
+    observation: CreditObservation | null,
+  ): Promise<void> {
+    const groups = new Map<number, CreditGrantEvent[]>();
     for (const grant of this.store.listCreditGrantEventsAfterId(this.state.lastGrantId)) {
-      const account = this.store.listHistoricalAccounts().find((item) => item.accountId === grant.accountId);
-      const observation = this.store.getCreditObservationForRun(grant.runId);
-      const total = this.store
-        .listCreditGrantEvents(grant.accountId, 5_000)
-        .reduce((sum, item) => sum + item.amount, 0);
-      const lines = [
-        "🎉 <b>AgentRouter credit grant confirmed</b>",
-        "",
-        `<b>Account:</b> ${escapeHtml(account?.label || grant.accountId)}`,
-        `<b>Grant:</b> ${money(grant.amount, true)}`,
-        `<b>Balance:</b> ${money(observation?.balance)}`,
-        `<b>Balance change:</b> ${money(observation?.balanceDelta, true)}`,
-        `<b>Consumed:</b> ${money(observation?.consumed)} (${money(observation?.consumedDelta, true)})`,
-        `<b>Since prior sample:</b> ${escapeHtml(elapsed(observation?.minutesSincePrevious ?? null))}`,
-        `<b>Confirmed grant total:</b> ${money(total)}`,
-        `<b>Session:</b> ${observation?.sessionReused ? "reused" : "fresh"} · logout ${observation?.loggedOut ? "confirmed" : "not confirmed"}`,
-        `<b>Grant time:</b> ${escapeHtml(observedAt(grant.occurredAt))}`,
-        "",
-        `<a href="${escapeHtml(this.config.telegram.dashboardUrl)}">Open full analytics</a>`,
-      ];
-      await this.sendRich(grant.accountId, account?.label || grant.accountId, lines.join("\n"));
-      this.state.lastGrantId = grant.id;
+      const grants = groups.get(grant.runId) ?? [];
+      grants.push(grant);
+      groups.set(grant.runId, grants);
+    }
+
+    for (const [grantRunId, grants] of groups) {
+      if (grantRunId === runId) continue;
+      const grantObservation = this.store.getCreditObservationForRun(grantRunId);
+      const account = this.store
+        .listHistoricalAccounts()
+        .find((item) => item.accountId === grants[0].accountId);
+      if (grantObservation) {
+        await this.processBalanceAlert(
+          account?.label || grants[0].accountId,
+          grantObservation,
+          grants,
+        );
+      } else {
+        await this.sendGrantWithoutObservation(account?.label || grants[0].accountId, grants);
+      }
+      this.state.lastGrantId = grants.at(-1)!.id;
+      await this.stateStore.save(this.state);
+    }
+
+    const currentGrants = groups.get(runId) ?? [];
+    if (observation) {
+      await this.processBalanceAlert(label, observation, currentGrants);
+    } else if (currentGrants.length > 0) {
+      await this.sendGrantWithoutObservation(label, currentGrants);
+    }
+    if (currentGrants.length > 0) {
+      this.state.lastGrantId = currentGrants.at(-1)!.id;
       await this.stateStore.save(this.state);
     }
   }
 
-  private async processBalanceAlert(label: string, observation: CreditObservation): Promise<void> {
+  private async sendGrantWithoutObservation(
+    label: string,
+    grants: CreditGrantEvent[],
+  ): Promise<void> {
+    const amount = grants.reduce((sum, grant) => sum + grant.amount, 0);
+    await this.transport.sendMessage([
+      "🎉 <b>AgentRouter credit grant confirmed</b>",
+      "",
+      `<b>Account:</b> ${escapeHtml(label)}`,
+      `<b>Captured grants:</b> ${money(amount, true)} · ${grants.length} event${grants.length === 1 ? "" : "s"}`,
+      `<b>Grant time:</b> ${escapeHtml(observedAt(grants.at(-1)!.occurredAt))}`,
+      `<b>Balance evidence:</b> no matching verified observation was available`,
+      "",
+      `<a href="${escapeHtml(this.config.telegram.dashboardUrl)}">Open full analytics</a>`,
+    ].join("\n"));
+  }
+
+  private async processBalanceAlert(
+    label: string,
+    observation: CreditObservation,
+    grants: CreditGrantEvent[],
+  ): Promise<boolean> {
     const state = accountState(this.state, observation.accountId);
     const low = this.config.telegram.lowBalanceUsd > 0 &&
       observation.balance < this.config.telegram.lowBalanceUsd;
     const enteredLow = low && !state.lowBalanceActive;
+    const positiveDelta = (observation.balanceDelta ?? 0) > 0;
     const largeDrop = this.config.telegram.largeDropUsd > 0 &&
       (observation.balanceDelta ?? 0) <= -this.config.telegram.largeDropUsd;
+    const capturedGrantAmount = grants.reduce((sum, grant) => sum + grant.amount, 0);
 
-    if (!enteredLow && !largeDrop) {
+    if (!enteredLow && !largeDrop && !positiveDelta && grants.length === 0) {
       if (
         state.lowBalanceActive &&
         observation.balance >= this.config.telegram.lowBalanceUsd * 1.1
       ) state.lowBalanceActive = false;
       await this.stateStore.save(this.state);
-      return;
+      return false;
     }
 
-    const title = enteredLow && largeDrop
-      ? "⚠️ <b>Low balance after a large decrease</b>"
-      : enteredLow
-        ? "⚠️ <b>AgentRouter balance is low</b>"
-        : "📉 <b>Large AgentRouter balance decrease</b>";
+    const title = positiveDelta && grants.length > 0
+      ? "🎉 <b>Grant evidence and a balance increase observed</b>"
+      : positiveDelta
+        ? "💜 <b>AgentRouter balance increased</b>"
+        : grants.length > 0
+          ? "🎉 <b>AgentRouter credit grant confirmed</b>"
+          : enteredLow && largeDrop
+            ? "⚠️ <b>Low balance after a large decrease</b>"
+            : enteredLow
+              ? "⚠️ <b>AgentRouter balance is low</b>"
+              : "📉 <b>Large AgentRouter balance decrease</b>";
+    const confirmedGrantTotal = this.store
+      .listCreditGrantEvents(observation.accountId, 5_000)
+      .reduce((sum, grant) => sum + grant.amount, 0);
+    const observedIncreaseTotal = this.store
+      .listCreditObservations(observation.accountId, 5_000)
+      .reduce((sum, item) => sum + Math.max(0, item.balanceDelta ?? 0), 0);
     const lines = [
       title,
       "",
@@ -412,7 +482,19 @@ export class TelegramNotifier {
       `<b>Consumed:</b> ${money(observation.consumed)}`,
       `<b>Consumption change:</b> ${money(observation.consumedDelta, true)}`,
       `<b>Interval:</b> ${escapeHtml(elapsed(observation.minutesSincePrevious))}`,
-      `<b>Low-balance threshold:</b> ${money(this.config.telegram.lowBalanceUsd)}`,
+      ...(grants.length > 0
+        ? [
+            `<b>Captured grant logs:</b> ${money(capturedGrantAmount, true)} · ${grants.length} confirmed event${grants.length === 1 ? "" : "s"}`,
+            ...(positiveDelta && Math.abs((observation.balanceDelta ?? 0) - capturedGrantAmount) >= 0.01
+              ? [`<b>Unattributed balance difference:</b> ${money((observation.balanceDelta ?? 0) - capturedGrantAmount, true)}`]
+              : []),
+          ]
+        : positiveDelta
+          ? ["<b>Captured grant logs:</b> none — this is an observed balance increase, not a confirmed grant"]
+          : []),
+      `<b>Observed positive deltas:</b> ${money(observedIncreaseTotal)} total`,
+      `<b>Confirmed grant logs:</b> ${money(confirmedGrantTotal)} total`,
+      ...(enteredLow ? [`<b>Low-balance threshold:</b> ${money(this.config.telegram.lowBalanceUsd)}`] : []),
       `<b>Session:</b> ${observation.sessionReused ? "reused" : "fresh"} · logout ${observation.loggedOut ? "confirmed" : "not confirmed"}`,
       `<b>Observed:</b> ${escapeHtml(observedAt(observation.observedAt))}`,
       "",
@@ -421,6 +503,7 @@ export class TelegramNotifier {
     await this.sendRich(observation.accountId, label, lines.join("\n"));
     if (low) state.lowBalanceActive = true;
     await this.stateStore.save(this.state);
+    return true;
   }
 
   private async sendRich(accountId: string, label: string, html: string): Promise<void> {
