@@ -1,0 +1,11 @@
+{
+  "schedulerEnabled": true,
+  "intervalMinutes": 60,
+  "accountDelaySeconds": 5,
+  "runOnStart": false,
+  "openDashboardOnStart": false,
+  "browserHeadless": true,
+  "twoFactorTimeoutMinutes": 10,
+  "captureScreenshots": true,
+  "activityLookbackDays": 30
+}

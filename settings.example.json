@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "automation": {
+    "schedulerEnabled": true,
+    "intervalMinutes": 60,
+    "accountDelaySeconds": 5,
+    "runOnStart": false,
+    "openDashboardOnStart": true,
+    "browserHeadless": true,
+    "twoFactorTimeoutMinutes": 5,
+    "captureScreenshots": true,
+    "activityLookbackDays": 7
+  }
+}

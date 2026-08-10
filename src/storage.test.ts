@@ -1,0 +1,173 @@
+import { afterEach, describe, expect, test } from "bun:test";
+import type { RunSnapshot } from "./storage";
+import { Store } from "./storage";
+
+const stores: Store[] = [];
+
+function createStore(): Store {
+  const store = new Store(":memory:");
+  stores.push(store);
+  return store;
+}
+
+function snapshot(overrides: Partial<RunSnapshot> = {}): RunSnapshot {
+  return {
+    accountId: "account-1",
+    accountLabel: "Account 1",
+    startedAt: "2026-08-09T10:00:00.000Z",
+    endedAt: "2026-08-09T10:00:05.000Z",
+    status: "ok",
+    loginMs: 2_000,
+    dashboardMs: 500,
+    totalMs: 5_000,
+    summary: { site: { version: "test" } },
+    metrics: {
+      balance: 75.5,
+      consumed: 20,
+      requestCount: 10,
+      statisticalCount: 4,
+      statisticalTokens: 1_000,
+      quotaPerUnit: 500_000,
+    },
+    usagePoints: [
+      {
+        accountId: "account-1",
+        granularity: "day",
+        createdAt: 1_786_262_400,
+        modelName: "model-a",
+        requestCount: 4,
+        tokenUsed: 1_000,
+        quota: 250_000,
+      },
+    ],
+    apiCalls: [
+      { path: "/api/user/self", method: "GET", status: 200, ok: true, latencyMs: 20 },
+    ],
+    loggedOut: true,
+    sessionReused: false,
+    ...overrides,
+  };
+}
+
+afterEach(() => {
+  while (stores.length > 0) stores.pop()!.close();
+});
+
+describe("Store", () => {
+  test("persists normalized runs and metrics", () => {
+    const store = createStore();
+    const id = store.saveRun(snapshot());
+    expect(id).toBeGreaterThan(0);
+
+    const [run] = store.listRuns(10, "account-1");
+    expect(run.status).toBe("ok");
+    expect(run.metrics.balance).toBe(75.5);
+    expect(run.loggedOut).toBe(true);
+    expect(run.summary).toEqual({ site: { version: "test" } });
+
+    const [history] = store.listMetricHistory("account-1", 10);
+    expect(history.metrics.statisticalTokens).toBe(1_000);
+  });
+
+  test("rejects successful runs without verified money and logout evidence", () => {
+    const store = createStore();
+    expect(() => store.saveRun(snapshot({ loggedOut: false }))).toThrow("confirmed AgentRouter logout");
+    expect(() => store.saveRun(snapshot({ metrics: {} }))).toThrow("finite, non-negative");
+    expect(store.getRunStatusCounts()).toEqual({ successful: 0, failed: 0 });
+  });
+
+  test("upserts overlapping usage points from later checks", () => {
+    const store = createStore();
+    store.saveRun(snapshot());
+    store.saveRun(
+      snapshot({
+        startedAt: "2026-08-09T11:00:00.000Z",
+        endedAt: "2026-08-09T11:00:05.000Z",
+        usagePoints: [
+          {
+            accountId: "account-1",
+            granularity: "day",
+            createdAt: 1_786_262_400,
+            modelName: "model-a",
+            requestCount: 6,
+            tokenUsed: 1_500,
+            quota: 300_000,
+          },
+        ],
+      }),
+    );
+
+    const usage = store.listUsagePoints("account-1", "day");
+    expect(usage).toHaveLength(1);
+    expect(usage[0].requestCount).toBe(6);
+    expect(usage[0].tokenUsed).toBe(1_500);
+  });
+
+  test("keeps historical accounts after credentials are removed", () => {
+    const store = createStore();
+    store.saveRun(snapshot());
+    expect(store.listHistoricalAccounts()).toEqual([
+      {
+        accountId: "account-1",
+        label: "Account 1",
+        lastRunAt: "2026-08-09T10:00:00.000Z",
+        lastStatus: "ok",
+      },
+    ]);
+  });
+
+  test("counts run outcomes without parsing historical payloads", () => {
+    const store = createStore();
+    store.saveRun(snapshot());
+    store.saveRun(snapshot({
+      startedAt: "2026-08-09T11:00:00.000Z",
+      endedAt: "2026-08-09T11:00:05.000Z",
+      status: "error",
+      loggedOut: false,
+      metrics: {},
+      errorMessage: "test failure",
+    }));
+    expect(store.getRunStatusCounts()).toEqual({ successful: 1, failed: 1 });
+  });
+
+  test("records balance changes as credit observations without claiming causality", () => {
+    const store = createStore();
+    store.saveRun(snapshot());
+    store.saveRun(
+      snapshot({
+        startedAt: "2026-08-09T12:00:00.000Z",
+        endedAt: "2026-08-09T12:00:05.000Z",
+        metrics: { ...snapshot().metrics, balance: 100.5, consumed: 20 },
+        sessionReused: true,
+      }),
+    );
+    const observations = store.listCreditObservations("account-1", 10);
+    expect(observations).toHaveLength(2);
+    expect(observations[0].classification).toBe("credit-increase");
+    expect(observations[0].balanceDelta).toBe(25);
+    expect(observations[0].sessionReused).toBe(true);
+    expect(observations[1].classification).toBe("initial");
+  });
+
+  test("deduplicates confirmed AgentRouter daily sign-in grants", () => {
+    const store = createStore();
+    const creditGrantEvents = [{
+      sourceEventId: "log-42",
+      occurredAt: 1_786_286_400,
+      amount: 25,
+      classification: "daily-signin",
+      description: "每日签到成功，增加额度 ＄25.000000 额度",
+    }];
+    store.saveRun(snapshot({ summary: { creditGrantEvents } }));
+    store.saveRun(snapshot({
+      startedAt: "2026-08-09T11:00:00.000Z",
+      endedAt: "2026-08-09T11:00:05.000Z",
+      summary: { creditGrantEvents },
+    }));
+
+    const grants = store.listCreditGrantEvents("account-1", 10);
+    expect(grants).toHaveLength(1);
+    expect(grants[0].amount).toBe(25);
+    expect(grants[0].classification).toBe("daily-signin");
+  });
+});

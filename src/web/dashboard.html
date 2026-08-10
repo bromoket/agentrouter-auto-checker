@@ -1,0 +1,277 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <meta name="theme-color" content="#090311">
+    <title>AgentRouter Observatory</title>
+    <link rel="stylesheet" href="/dashboard.css">
+    <script src="/vendor/chart.umd.js" defer></script>
+    <script src="/dashboard.js" defer></script>
+  </head>
+  <body>
+    <div class="ambient ambient-one" aria-hidden="true"></div>
+    <div class="ambient ambient-two" aria-hidden="true"></div>
+    <div class="noise" aria-hidden="true"></div>
+
+    <header class="topbar glass">
+      <button id="brand-home" class="brand" type="button" aria-label="Open all accounts overview">
+        <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+        <span>
+          <small>AGENTROUTER</small>
+          <strong>Observatory</strong>
+        </span>
+      </button>
+      <div class="topbar-center">
+        <span id="scheduler-state" class="status-chip neutral"><i></i>Loading automation</span>
+        <span id="next-run-label" class="next-run">Calculating next cycle…</span>
+      </div>
+      <div class="topbar-actions">
+        <button id="stop-all" class="button danger-button hidden" type="button"><span>■</span> Stop</button>
+        <button id="run-all" class="button primary" type="button"><span>▶</span> Run all</button>
+        <button id="open-settings" class="button icon-only" type="button" aria-label="Schedule and settings">⚙</button>
+        <button id="add-account" class="button secondary" type="button"><span>＋</span> Account</button>
+      </div>
+    </header>
+
+    <section id="run-console" class="run-console glass hidden" aria-live="polite">
+      <div class="run-orbit" aria-hidden="true"><span></span><span></span><span></span></div>
+      <div class="run-copy">
+        <div class="run-kicker"><span id="run-stage">Preparing</span><b id="run-percent">0%</b></div>
+        <h2 id="run-message">Preparing the account queue.</h2>
+        <p id="run-account-label">Waiting for the first account</p>
+      </div>
+      <div class="progress-shell" aria-hidden="true"><i id="run-progress"></i></div>
+      <button id="toggle-events" class="button ghost" type="button">Live timeline</button>
+      <button id="dismiss-run" class="dismiss-run hidden" type="button" aria-label="Dismiss completed cycle status">×</button>
+      <div id="event-timeline" class="event-timeline hidden"></div>
+    </section>
+
+    <section id="mobile-challenge" class="challenge-backdrop hidden" aria-live="assertive">
+      <article class="challenge-card">
+        <div class="challenge-rings" aria-hidden="true"><i></i><i></i><i></i></div>
+        <p id="challenge-eyebrow" class="eyebrow">GITHUB MOBILE · SECURE APPROVAL</p>
+        <h2 id="challenge-account">Approve the sign-in</h2>
+        <p id="challenge-prompt">Open GitHub Mobile and approve the request.</p>
+        <strong id="challenge-code" class="challenge-code">PUSH</strong>
+        <div class="challenge-status"><i></i><span id="challenge-status">Listening for GitHub</span></div>
+        <p id="challenge-expiry" class="muted"></p>
+        <button id="challenge-stop" class="button danger-button" type="button">Stop this cycle</button>
+      </article>
+    </section>
+
+    <main class="app-shell">
+      <aside class="rail glass">
+        <div class="rail-heading">
+          <span>WORKSPACES</span>
+          <button id="rail-add" class="mini-button" type="button" aria-label="Add account">＋</button>
+        </div>
+        <button id="overview-nav" class="nav-card active" type="button">
+          <span class="nav-icon spectrum">◈</span>
+          <span><strong>All accounts</strong><small>Unified command center</small></span>
+          <b id="overview-health" class="health-dot neutral"></b>
+        </button>
+        <div id="account-list" class="account-list"></div>
+        <div id="onboarding" class="onboarding hidden">
+          <span class="onboarding-icon">＋</span>
+          <strong>Add your first account</strong>
+          <p>Credentials stay in the protected local file and never enter the browser UI again.</p>
+          <button id="onboarding-add" class="button primary" type="button">Configure account</button>
+        </div>
+        <div class="rail-footer">
+          <div><span>Schedule</span><strong id="schedule-label">Loading…</strong></div>
+          <div><span>Credential vault</span><code id="account-file">data/accounts.json</code></div>
+        </div>
+      </aside>
+
+      <section class="workspace">
+        <div id="overview-view">
+          <section class="hero glass animated-border">
+            <div class="hero-copy">
+              <p class="eyebrow">UNIFIED INTELLIGENCE</p>
+              <h1>Every account.<br><span>One living signal.</span></h1>
+              <p>Balances, spend, usage, grants, and automation health—merged without losing account-level detail.</p>
+              <div class="hero-actions">
+                <button id="hero-run" class="button primary large" type="button">Run collection cycle <span>↗</span></button>
+                <button id="hero-settings" class="button ghost large" type="button">Tune schedule</button>
+              </div>
+            </div>
+            <div class="hero-visual" aria-hidden="true">
+              <div class="core"><span>AR</span></div>
+              <div class="orbit orbit-a"><i></i></div>
+              <div class="orbit orbit-b"><i></i></div>
+              <div class="orbit orbit-c"><i></i></div>
+            </div>
+          </section>
+
+          <section id="overview-metrics" class="metric-grid overview-metrics"></section>
+
+          <section class="dashboard-grid">
+            <article class="panel glass chart-panel span-8">
+              <header class="panel-heading">
+                <div><p class="eyebrow">PORTFOLIO PULSE</p><h2>Combined balance & spend</h2><p>Click any point to inspect its exact snapshot.</p></div>
+                <span class="live-pill"><i></i> Interactive</span>
+              </header>
+              <div class="chart-wrap chart-tall"><canvas id="overview-money-chart"></canvas></div>
+            </article>
+            <article class="panel glass chart-panel span-4">
+              <header class="panel-heading">
+                <div><p class="eyebrow">CREDIT INTELLIGENCE</p><h2>Confirmed grants</h2><p>AgentRouter system events, with balance deltas as supporting evidence.</p></div>
+              </header>
+              <div class="earnings-hero"><strong id="overview-earnings">$0.00</strong><span>confirmed grants · <b id="overview-observed-earnings">$0.00 observed balance increases</b></span></div>
+              <div class="chart-wrap chart-compact"><canvas id="overview-earnings-chart"></canvas></div>
+            </article>
+            <article class="panel glass chart-panel span-7">
+              <header class="panel-heading">
+                <div><p class="eyebrow">ACCOUNT MATRIX</p><h2>Balance comparison</h2></div>
+              </header>
+              <div class="chart-wrap"><canvas id="overview-accounts-chart"></canvas></div>
+            </article>
+            <article class="panel glass span-5">
+              <header class="panel-heading">
+                <div><p class="eyebrow">AUTOMATION HEALTH</p><h2>Run reliability</h2></div>
+              </header>
+              <div id="health-summary" class="health-summary"></div>
+              <div id="account-comparison" class="account-comparison"></div>
+            </article>
+          </section>
+        </div>
+
+        <div id="account-view" class="hidden">
+          <section class="account-hero glass animated-border">
+            <div>
+              <button id="back-overview" class="back-link" type="button">← All accounts</button>
+              <p id="selected-username" class="eyebrow"></p>
+              <h1 id="selected-label">Account</h1>
+              <p id="selected-last-run" class="muted"></p>
+            </div>
+            <div class="account-actions">
+              <button id="run-account" class="button primary" type="button">▶ Run now</button>
+              <button id="authenticate-account" class="button ghost" type="button">Visible fallback</button>
+              <button id="export-account" class="button ghost" type="button">Export</button>
+              <button id="edit-account" class="button icon-only" type="button" aria-label="Edit account">✎</button>
+              <button id="remove-account" class="button icon-only danger-button" type="button" aria-label="Remove account">⌫</button>
+            </div>
+          </section>
+
+          <section id="metric-grid" class="metric-grid"></section>
+
+          <section class="dashboard-grid">
+            <article class="panel glass chart-panel span-8">
+              <header class="panel-heading">
+                <div><p class="eyebrow">FINANCIAL TRAJECTORY</p><h2>Balance & lifetime spend</h2><p>Hover for values. Click to pin a snapshot.</p></div>
+              </header>
+              <div class="chart-wrap chart-tall"><canvas id="money-chart"></canvas></div>
+            </article>
+            <article class="panel glass chart-panel span-4">
+              <header class="panel-heading">
+                <div><p class="eyebrow">AUTOMATION VELOCITY</p><h2>Run duration</h2></div>
+              </header>
+              <div class="chart-wrap chart-tall"><canvas id="duration-chart"></canvas></div>
+            </article>
+            <article class="panel glass chart-panel span-6">
+              <header class="panel-heading"><div><p class="eyebrow">ACTIVITY</p><h2>Requests & tokens</h2></div></header>
+              <div class="chart-wrap"><canvas id="activity-chart"></canvas></div>
+            </article>
+            <article class="panel glass chart-panel span-6">
+              <header class="panel-heading"><div><p class="eyebrow">PERFORMANCE</p><h2>RPM & TPM</h2></div></header>
+              <div class="chart-wrap"><canvas id="performance-chart"></canvas></div>
+            </article>
+            <article class="panel glass chart-panel span-8">
+              <header class="panel-heading usage-heading">
+                <div><p class="eyebrow">MODEL INTELLIGENCE</p><h2>Usage by model</h2></div>
+                <select id="usage-granularity" aria-label="Usage granularity">
+                  <option value="hour">24 hours</option>
+                  <option value="day" selected>7 days</option>
+                  <option value="week">28 days</option>
+                </select>
+              </header>
+              <div class="chart-wrap chart-tall"><canvas id="model-trend-chart"></canvas></div>
+            </article>
+            <article class="panel glass span-4">
+              <header class="panel-heading"><div><p class="eyebrow">MODEL SHARE</p><h2>Spend distribution</h2></div></header>
+              <div id="model-share" class="model-share"></div>
+            </article>
+          </section>
+
+          <section class="panel glass observations-panel">
+            <header class="panel-heading">
+              <div><p class="eyebrow">CONFIRMED EARNINGS</p><h2>AgentRouter grant events</h2><p>Directly parsed from AgentRouter's type-4 system log—not inferred from login timing.</p></div>
+              <span id="grant-summary" class="status-chip neutral">No confirmed grants</span>
+            </header>
+            <div class="table-scroll"><table><thead><tr><th>Granted</th><th>Since prior grant</th><th>Type</th><th>Amount</th><th>AgentRouter evidence</th></tr></thead><tbody id="grants-body"></tbody></table></div>
+          </section>
+
+          <section class="panel glass observations-panel">
+            <header class="panel-heading">
+              <div><p class="eyebrow">CREDIT OBSERVATORY</p><h2>Balance change evidence</h2><p>Measured correlations—not claims that a login or logout caused a grant.</p></div>
+              <span id="credit-summary" class="status-chip neutral">No observations</span>
+            </header>
+            <div class="table-scroll"><table><thead><tr><th>Observed</th><th>Signal</th><th>Balance</th><th>Balance change</th><th>Spend change</th><th>Interval</th><th>Session</th><th>Logout</th></tr></thead><tbody id="credits-body"></tbody></table></div>
+          </section>
+
+          <section class="data-tabs panel glass">
+            <div class="tab-list" role="tablist">
+              <button class="data-tab active" data-tab="activity" type="button">Usage activity</button>
+              <button class="data-tab" data-tab="runs" type="button">Check audit</button>
+            </div>
+            <div id="activity-tab" class="tab-panel">
+              <div class="table-scroll"><table><thead><tr><th>Time</th><th>Token</th><th>Model</th><th>Prompt</th><th>Completion</th><th>Spend</th><th>Group</th><th>Mode</th></tr></thead><tbody id="activity-body"></tbody></table></div>
+            </div>
+            <div id="runs-tab" class="tab-panel hidden">
+              <div class="table-scroll"><table><thead><tr><th>Started</th><th>Status</th><th>Login</th><th>Dashboard</th><th>Total</th><th>Logout</th><th>Details</th><th>Capture</th></tr></thead><tbody id="runs-body"></tbody></table></div>
+            </div>
+          </section>
+        </div>
+      </section>
+    </main>
+
+    <aside id="data-inspector" class="data-inspector hidden" aria-live="polite">
+      <button id="close-inspector" class="icon-button" type="button" aria-label="Close inspector">×</button>
+      <p class="eyebrow">PINNED DATA POINT</p><h2 id="inspector-title">Snapshot</h2><div id="inspector-content"></div>
+    </aside>
+
+    <dialog id="account-dialog">
+      <form id="account-form" method="dialog">
+        <div class="dialog-heading"><div><p class="eyebrow">LOCAL CREDENTIAL VAULT</p><h2 id="dialog-title">Add account</h2></div><button id="close-dialog" class="icon-button" type="button" aria-label="Close">×</button></div>
+        <input id="account-id" type="hidden">
+        <div class="field-grid">
+          <label>GitHub username<input id="github-username" name="githubUsername" autocomplete="username" required maxlength="39" pattern="[A-Za-z0-9-]+"></label>
+          <label>Display label<input id="account-label" name="label" maxlength="80" placeholder="Defaults to username"></label>
+        </div>
+        <label>GitHub password<input id="github-password" name="githubPassword" type="password" autocomplete="current-password" maxlength="512"><small id="password-help">Required for a new account.</small></label>
+        <div class="field-grid">
+          <label>Run order<input id="account-run-order" name="runOrder" type="number" min="0" max="10000" step="1" value="0"></label>
+          <label class="switch-row"><input id="account-enabled" name="enabled" type="checkbox" checked><span class="switch"></span><span>Scheduled checks enabled</span></label>
+        </div>
+        <p id="form-error" class="form-error" role="alert"></p>
+        <div class="dialog-actions"><button id="cancel-dialog" class="button ghost" type="button">Cancel</button><button class="button primary" type="submit">Save account</button></div>
+      </form>
+    </dialog>
+
+    <dialog id="settings-dialog">
+      <form id="settings-form" method="dialog">
+        <div class="dialog-heading"><div><p class="eyebrow">AUTOMATION ENGINE</p><h2>Schedule & collection</h2></div><button id="close-settings" class="icon-button" type="button" aria-label="Close">×</button></div>
+        <div class="field-grid">
+          <label>Cycle interval <span>minutes</span><input id="interval-minutes" type="number" min="5" max="10080" step="1" required></label>
+          <label>Account gap <span>seconds</span><input id="account-delay-seconds" type="number" min="0" max="3600" step="1" required></label>
+          <label>Mobile approval timeout <span>minutes</span><input id="two-factor-timeout" type="number" min="1" max="30" step="1" required></label>
+          <label>Activity lookback <span>days</span><input id="activity-lookback" type="number" min="1" max="28" step="1" required></label>
+        </div>
+        <div class="switch-grid">
+          <label class="switch-row"><input id="scheduler-enabled" type="checkbox"><span class="switch"></span><span>Scheduled cycles</span></label>
+          <label class="switch-row"><input id="run-on-start" type="checkbox"><span class="switch"></span><span>Run on startup</span></label>
+          <label class="switch-row"><input id="open-on-start" type="checkbox"><span class="switch"></span><span>Open dashboard on startup</span></label>
+          <label class="switch-row"><input id="browser-headless" type="checkbox"><span class="switch"></span><span>Headless Chromium</span></label>
+          <label class="switch-row"><input id="capture-screenshots" type="checkbox"><span class="switch"></span><span>Capture screenshots</span></label>
+        </div>
+        <div class="info-callout"><strong>Persistent browser authentication</strong><p>Visible Chromium is the verified default and reuses its isolated GitHub profile between cycles. Headless mode is experimental: initialize the profile visibly before moving it to an unattended server.</p></div>
+        <p id="settings-error" class="form-error" role="alert"></p>
+        <div class="dialog-actions"><button id="cancel-settings" class="button ghost" type="button">Cancel</button><button class="button primary" type="submit">Save settings</button></div>
+      </form>
+    </dialog>
+
+    <div id="toast" class="toast hidden" role="status"></div>
+  </body>
+</html>

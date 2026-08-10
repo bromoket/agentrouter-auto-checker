@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "accounts": [
+    {
+      "id": "primary",
+      "label": "Primary account",
+      "githubUsername": "github-username",
+      "githubPassword": "github-password",
+      "enabled": true,
+      "runOrder": 0
+    }
+  ]
+}

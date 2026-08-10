@@ -1,0 +1,55 @@
+[Unit]
+Description=AgentRouter account monitor
+Documentation=https://github.com/bromoket/agentrouter-auto-checker
+After=network-online.target tailscaled.service
+Wants=network-online.target tailscaled.service
+
+[Service]
+Type=simple
+User=agentrouter
+Group=agentrouter
+WorkingDirectory=/opt/agentrouter-monitor
+EnvironmentFile=/etc/agentrouter-monitor/env
+Environment=HOME=/var/lib/agentrouter-monitor
+Environment=XDG_CACHE_HOME=/var/lib/agentrouter-monitor/cache
+Environment=PLAYWRIGHT_BROWSERS_PATH=/var/lib/agentrouter-monitor/ms-playwright
+ExecStart=/usr/local/bin/bun run start
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=45
+KillMode=mixed
+UMask=0077
+
+StateDirectory=agentrouter-monitor
+CacheDirectory=agentrouter-monitor
+RuntimeDirectory=agentrouter-monitor
+ReadWritePaths=/var/lib/agentrouter-monitor
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+LockPersonality=true
+ProtectClock=true
+ProtectControlGroups=true
+ProtectHostname=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectProc=invisible
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictRealtime=true
+RestrictSUIDSGID=true
+SystemCallArchitectures=native
+TasksMax=1024
+MemoryHigh=1536M
+MemoryMax=2G
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=agentrouter-monitor
+
+[Install]
+WantedBy=multi-user.target
