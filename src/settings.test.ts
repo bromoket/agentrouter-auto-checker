@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { copyFile, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DEFAULT_AUTOMATION_SETTINGS, SettingsStore } from "./settings";
@@ -39,5 +39,18 @@ describe("SettingsStore", () => {
     expect(saved.twoFactorTimeoutMinutes).toBe(30);
     expect(saved.activityLookbackDays).toBe(14);
     expect(await store.load()).toEqual(saved);
+  });
+
+  test("loads the production server settings template", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "agentrouter-settings-test-"));
+    directories.push(directory);
+    const settingsPath = join(directory, "settings.json");
+    await copyFile(new URL("../deploy/settings.server.example.json", import.meta.url), settingsPath);
+    const settings = await new SettingsStore(settingsPath).load();
+
+    expect(settings.schedulerEnabled).toBe(true);
+    expect(settings.openDashboardOnStart).toBe(false);
+    expect(settings.browserHeadless).toBe(true);
+    expect(settings.activityLookbackDays).toBe(28);
   });
 });
