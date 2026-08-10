@@ -4,6 +4,7 @@ node_modules/
 !.env.example
 data/accounts.json
 data/settings.json
+data/telegram-state.json
 data/payload.json
 data/states/
 data/browser-profiles/

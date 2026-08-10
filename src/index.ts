@@ -7,6 +7,7 @@ import { CheckCoordinator } from "./coordinator";
 import { startDashboard } from "./dashboard";
 import { SettingsStore } from "./settings";
 import { Store } from "./storage";
+import { TelegramNotifier } from "./telegram";
 
 function parseArgs(): Set<string> {
   return new Set(process.argv.slice(2).map((argument) => argument.trim().toLowerCase()));
@@ -48,7 +49,14 @@ async function main(): Promise<void> {
   const accounts = new AccountStore(config.accountFilePath);
   const settings = new SettingsStore(config.settingsFilePath);
   const challenges = new AuthenticationChallengeBroker();
-  const coordinator = new CheckCoordinator(store, accounts, config, settings, challenges);
+  let telegram: TelegramNotifier | null = null;
+  try {
+    telegram = await TelegramNotifier.create(config, store);
+    if (telegram) console.log("telegram: verified private recipient; material alerts enabled");
+  } catch (error) {
+    console.error(`telegram disabled: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  const coordinator = new CheckCoordinator(store, accounts, config, settings, challenges, telegram);
   const args = parseArgs();
   const runOnce = args.has("--once");
   const dashboardOnly = args.has("--dashboard");

@@ -11,6 +11,7 @@
     "audit:db": "bun run scripts/db-audit.mjs",
     "backup:db": "bun run scripts/db-backup.mjs",
     "probe:headless": "bun run scripts/headless-probe.ts",
+    "telegram:test": "bun run scripts/telegram-test.ts",
     "typecheck": "bunx tsc --noEmit",
     "test": "bun test",
     "test:ui": "node scripts/ui-smoke.mjs",

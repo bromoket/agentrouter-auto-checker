@@ -8,6 +8,7 @@ import type { AutomationSettings } from "./settings";
 import { SettingsStore } from "./settings";
 import type { RunSnapshot } from "./storage";
 import { Store } from "./storage";
+import type { TelegramNotifier } from "./telegram";
 
 export interface CoordinatorStatus {
   running: boolean;
@@ -91,6 +92,7 @@ export class CheckCoordinator {
     private readonly config: AppConfig,
     private readonly settings: SettingsStore,
     private readonly challenges: AuthenticationChallengeBroker,
+    private readonly telegram: TelegramNotifier | null = null,
   ) {}
 
   getStatus(): CoordinatorStatus {
@@ -265,7 +267,8 @@ export class CheckCoordinator {
           snapshot = failedSnapshot(account, accountStartedAt, error);
         }
 
-        this.store.saveRun(snapshot);
+        const runId = this.store.saveRun(snapshot);
+        await this.telegram?.processRun(runId, snapshot);
         this.status.completedAccounts += 1;
         const reason = snapshot.errorMessage ? `: ${snapshot.errorMessage}` : "";
         console.log(

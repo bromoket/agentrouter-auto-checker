@@ -729,6 +729,88 @@ export class Store {
       description: row.description,
     }));
   }
+
+  getCreditObservationForRun(runId: number): CreditObservation | null {
+    const row = this.db
+      .prepare(`
+        SELECT c.*, r.login_ms, r.logged_out, r.session_reused
+        FROM credit_observations c
+        INNER JOIN runs r ON r.id = c.run_id
+        WHERE c.run_id = ?
+      `)
+      .get(runId) as {
+      id: number;
+      run_id: number;
+      account_id: string;
+      observed_at: string;
+      balance: number;
+      consumed: number;
+      previous_balance: number | null;
+      previous_consumed: number | null;
+      balance_delta: number | null;
+      consumed_delta: number | null;
+      minutes_since_previous: number | null;
+      classification: CreditObservation["classification"];
+      login_ms: number;
+      logged_out: number;
+      session_reused: number;
+    } | null;
+    if (!row) return null;
+    return {
+      id: row.id,
+      runId: row.run_id,
+      accountId: row.account_id,
+      observedAt: row.observed_at,
+      balance: row.balance,
+      consumed: row.consumed,
+      previousBalance: row.previous_balance,
+      previousConsumed: row.previous_consumed,
+      balanceDelta: row.balance_delta,
+      consumedDelta: row.consumed_delta,
+      minutesSincePrevious: row.minutes_since_previous,
+      classification: row.classification,
+      loginMs: row.login_ms,
+      loggedOut: row.logged_out === 1,
+      sessionReused: row.session_reused === 1,
+    };
+  }
+
+  getLatestCreditGrantEventId(): number {
+    const row = this.db.prepare("SELECT COALESCE(MAX(id), 0) AS id FROM credit_grant_events").get() as {
+      id: number;
+    };
+    return row.id;
+  }
+
+  listCreditGrantEventsAfterId(id: number): CreditGrantEvent[] {
+    const rows = this.db
+      .prepare(`
+        SELECT * FROM credit_grant_events
+        WHERE id > ?
+        ORDER BY id ASC
+        LIMIT 100
+      `)
+      .all(Math.max(0, Math.trunc(id))) as Array<{
+      id: number;
+      run_id: number;
+      account_id: string;
+      source_event_id: string;
+      occurred_at: string;
+      amount: number;
+      classification: "daily-signin";
+      description: string;
+    }>;
+    return rows.map((row) => ({
+      id: row.id,
+      runId: row.run_id,
+      accountId: row.account_id,
+      sourceEventId: row.source_event_id,
+      occurredAt: row.occurred_at,
+      amount: row.amount,
+      classification: row.classification,
+      description: row.description,
+    }));
+  }
 }
 
 export function parseRun(snapshot: RawRunSnapshot): StoredRun {

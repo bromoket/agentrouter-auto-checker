@@ -169,5 +169,9 @@ describe("Store", () => {
     expect(grants).toHaveLength(1);
     expect(grants[0].amount).toBe(25);
     expect(grants[0].classification).toBe("daily-signin");
+    expect(store.getLatestCreditGrantEventId()).toBe(grants[0].id);
+    expect(store.listCreditGrantEventsAfterId(0)).toEqual(grants);
+    expect(store.listCreditGrantEventsAfterId(grants[0].id)).toEqual([]);
+    expect(store.getCreditObservationForRun(grants[0].runId)?.balance).toBe(75.5);
   });
 });

@@ -17,6 +17,19 @@ export interface AppConfig {
   dbPath: string;
   maxRecentRuns: number;
   disableWebAuthn: boolean;
+  telegram: TelegramConfig;
+}
+
+export interface TelegramConfig {
+  botToken: string | null;
+  chatId: string | null;
+  allowedUsername: string | null;
+  stateFilePath: string;
+  lowBalanceUsd: number;
+  largeDropUsd: number;
+  repeatedFailureCount: number;
+  graphsEnabled: boolean;
+  dashboardUrl: string;
 }
 
 const DEFAULT_BASE_URL = "https://agentrouter.org";
@@ -43,6 +56,13 @@ function parseBoolean(name: string, fallback: boolean): boolean {
     return false;
   }
   return fallback;
+}
+
+function parseNonNegativeNumber(name: string, fallback: number): number {
+  const raw = process.env[name]?.trim();
+  if (!raw) return fallback;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
 }
 
 function normalizeBaseUrl(raw: string): string {
@@ -113,6 +133,48 @@ function normalizeDashboardOrigins(raw: string | undefined, host: string, port: 
   return [...new Set(defaults)];
 }
 
+function loadTelegramConfig(dataDir: string, dashboardHost: string, dashboardPort: number): TelegramConfig {
+  const botToken = process.env.TELEGRAM_BOT_TOKEN?.trim() || null;
+  const chatId = process.env.TELEGRAM_CHAT_ID?.trim() || null;
+  const allowedUsername = process.env.TELEGRAM_ALLOWED_USERNAME?.trim().replace(/^@/, "").toLowerCase() || null;
+  if (botToken && !/^\d{8,12}:[A-Za-z0-9_-]{30,80}$/.test(botToken)) {
+    throw new Error("TELEGRAM_BOT_TOKEN has an invalid format.");
+  }
+  if (chatId && !/^-?\d{5,20}$/.test(chatId)) {
+    throw new Error("TELEGRAM_CHAT_ID must be a numeric private chat or group id.");
+  }
+  if (allowedUsername && !/^[a-z0-9_]{5,32}$/.test(allowedUsername)) {
+    throw new Error("TELEGRAM_ALLOWED_USERNAME has an invalid Telegram username format.");
+  }
+  if ((botToken || chatId || allowedUsername) && !(botToken && chatId && allowedUsername)) {
+    throw new Error(
+      "TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, and TELEGRAM_ALLOWED_USERNAME must be configured together.",
+    );
+  }
+
+  const dashboardUrl = new URL(
+    process.env.TELEGRAM_DASHBOARD_URL?.trim() || originForHost(dashboardHost, dashboardPort),
+  );
+  if (!["http:", "https:"].includes(dashboardUrl.protocol) || dashboardUrl.username || dashboardUrl.password) {
+    throw new Error("TELEGRAM_DASHBOARD_URL must be an HTTP(S) URL without embedded credentials.");
+  }
+  dashboardUrl.pathname = dashboardUrl.pathname.replace(/\/$/, "");
+  dashboardUrl.search = "";
+  dashboardUrl.hash = "";
+
+  return {
+    botToken,
+    chatId,
+    allowedUsername,
+    stateFilePath: process.env.TELEGRAM_STATE_FILE?.trim() || `${dataDir}/telegram-state.json`,
+    lowBalanceUsd: parseNonNegativeNumber("TELEGRAM_LOW_BALANCE_USD", 50),
+    largeDropUsd: parseNonNegativeNumber("TELEGRAM_LARGE_DROP_USD", 25),
+    repeatedFailureCount: parsePositiveInteger("TELEGRAM_REPEATED_FAILURE_COUNT", 3),
+    graphsEnabled: parseBoolean("TELEGRAM_GRAPHS_ENABLED", true),
+    dashboardUrl: dashboardUrl.toString().replace(/\/$/, ""),
+  };
+}
+
 export function loadConfig(): AppConfig {
   const dataDir = process.env.DATA_DIR?.trim() || "data";
   const dashboardPort = parsePositiveInteger("DASHBOARD_PORT", 3100);
@@ -139,5 +201,6 @@ export function loadConfig(): AppConfig {
     dbPath: process.env.DB_PATH?.trim() || `${dataDir}/checks.sqlite`,
     maxRecentRuns: parsePositiveInteger("MAX_RECENT_RUNS", 500),
     disableWebAuthn: parseBoolean("DISABLE_WEBAUTHN", true),
+    telegram: loadTelegramConfig(dataDir, dashboardHost, dashboardPort),
   };
 }
