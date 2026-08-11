@@ -366,8 +366,8 @@ export class Store {
       if (!snapshot.loggedOut) {
         throw new Error("A successful run must include a confirmed AgentRouter logout.");
       }
-      if (!Number.isFinite(balance) || balance < 0 || !Number.isFinite(consumed) || consumed < 0) {
-        throw new Error("A successful run must include finite, non-negative balance and consumption metrics.");
+      if (!Number.isFinite(balance) || !Number.isFinite(consumed) || consumed < 0) {
+        throw new Error("A successful run must include a finite balance and finite, non-negative consumption metrics.");
       }
     }
     const insertRun = this.db.prepare(`

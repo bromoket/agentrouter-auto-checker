@@ -72,8 +72,17 @@ describe("Store", () => {
   test("rejects successful runs without verified money and logout evidence", () => {
     const store = createStore();
     expect(() => store.saveRun(snapshot({ loggedOut: false }))).toThrow("confirmed AgentRouter logout");
-    expect(() => store.saveRun(snapshot({ metrics: {} }))).toThrow("finite, non-negative");
+    expect(() => store.saveRun(snapshot({ metrics: {} }))).toThrow("finite balance");
     expect(store.getRunStatusCounts()).toEqual({ successful: 0, failed: 0 });
+  });
+
+  test("persists a verified negative balance while rejecting negative consumption", () => {
+    const store = createStore();
+    const id = store.saveRun(snapshot({ metrics: { balance: -0.12, consumed: 275.12 } }));
+    expect(store.getCreditObservationForRun(id)?.balance).toBe(-0.12);
+    expect(() => store.saveRun(snapshot({ metrics: { balance: -0.12, consumed: -1 } }))).toThrow(
+      "non-negative consumption",
+    );
   });
 
   test("upserts overlapping usage points from later checks", () => {

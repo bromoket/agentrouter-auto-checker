@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import { createInterface } from "node:readline";
 import path from "node:path";
 import { chromium } from "playwright";
+import { parseLabeledNumber } from "./agentrouter-money.mjs";
 
 const USAGE_WINDOWS = [
   { granularity: "hour", seconds: 24 * 60 * 60 },
@@ -955,31 +956,23 @@ function computeMetrics(user, siteStatus, usagePoints, modelPayload, windowSecon
   };
 }
 
-function labeledNumber(text, label) {
-  const normalized = String(text ?? "").replace(/\s+/g, " ");
-  const match = normalized.match(
-    new RegExp(`${escapeRegExp(label)}\\s*\\$?([0-9][0-9,]*(?:\\.[0-9]+)?)`, "i"),
-  );
-  return match ? finiteNumber(match[1].replaceAll(",", ""), Number.NaN) : Number.NaN;
-}
-
 function visibleConsoleMetrics(text) {
   return {
-    balance: labeledNumber(text, "Current balance"),
-    consumed: labeledNumber(text, "Consumption"),
-    requestCount: labeledNumber(text, "Number of Requests"),
-    statisticalCount: labeledNumber(text, "Statistical count"),
-    statisticalQuota: labeledNumber(text, "Statistical quota"),
-    statisticalTokens: labeledNumber(text, "Statistical Tokens"),
-    averageRpm: labeledNumber(text, "Average RPM"),
-    averageTpm: labeledNumber(text, "Average TPM"),
+    balance: parseLabeledNumber(text, "Current balance"),
+    consumed: parseLabeledNumber(text, "Consumption"),
+    requestCount: parseLabeledNumber(text, "Number of Requests"),
+    statisticalCount: parseLabeledNumber(text, "Statistical count"),
+    statisticalQuota: parseLabeledNumber(text, "Statistical quota"),
+    statisticalTokens: parseLabeledNumber(text, "Statistical Tokens"),
+    averageRpm: parseLabeledNumber(text, "Average RPM"),
+    averageTpm: parseLabeledNumber(text, "Average TPM"),
   };
 }
 
 function visibleWalletMetrics(text) {
   return {
-    balance: labeledNumber(text, "Current balance"),
-    consumed: labeledNumber(text, "Consumption"),
+    balance: parseLabeledNumber(text, "Current balance"),
+    consumed: parseLabeledNumber(text, "Consumption"),
   };
 }
 
@@ -1335,7 +1328,13 @@ async function runWorker({ account, config }) {
     const consoleMoneyValid = Number.isFinite(consoleMetrics.balance) && Number.isFinite(consoleMetrics.consumed);
     const walletMoneyValid = Number.isFinite(walletMetrics.balance) && Number.isFinite(walletMetrics.consumed);
     if (!consoleMoneyValid && !walletMoneyValid) {
-      throw new Error("AgentRouter's visible Console and Wallet cards did not expose parseable money values.");
+      const diagnostic = (metrics) =>
+        `balance=${Number.isFinite(metrics.balance) ? metrics.balance : "unparseable"}, ` +
+        `consumption=${Number.isFinite(metrics.consumed) ? metrics.consumed : "unparseable"}`;
+      throw new Error(
+        "AgentRouter's visible Console and Wallet cards did not expose parseable money values " +
+        `(Console: ${diagnostic(consoleMetrics)}; Wallet: ${diagnostic(walletMetrics)}).`,
+      );
     }
     const requiredActivity = [
       consoleMetrics.requestCount,

@@ -76,6 +76,24 @@ const report = {
     ]),
   ),
   falseZeroRows,
+  invalidMoneyRows: all(`
+    SELECT
+      r.id,
+      r.account_id AS accountId,
+      r.started_at AS startedAt,
+      json_extract(r.metrics, '$.balance') AS balance,
+      json_extract(r.metrics, '$.consumed') AS consumed
+    FROM runs r
+    WHERE r.status = 'ok'
+      AND (
+        json_type(r.metrics, '$.balance') IS NULL
+        OR json_type(r.metrics, '$.balance') NOT IN ('integer', 'real')
+        OR json_type(r.metrics, '$.consumed') IS NULL
+        OR json_type(r.metrics, '$.consumed') NOT IN ('integer', 'real')
+        OR CAST(json_extract(r.metrics, '$.consumed') AS REAL) < 0
+      )
+    ORDER BY r.id
+  `),
   deletedRunIds,
   successfulWithoutLogout: all(`
     SELECT id, account_id AS accountId, started_at AS startedAt

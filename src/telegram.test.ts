@@ -191,6 +191,24 @@ describe("TelegramNotifier", () => {
     expect(JSON.stringify(messages[0].body)).toContain("Low balance after a large decrease");
   });
 
+  test("reports a negative balance as a low-balance decrease with signed money", async () => {
+    const { store, telegram, appConfig } = await fixture();
+    store.saveRun(snapshot("2026-08-09T10:00:00.000Z", 33.34));
+    const notifier = await TelegramNotifier.create(appConfig, store, telegram.fetcher);
+
+    const negative = snapshot("2026-08-09T11:00:00.000Z", -0.12, {
+      metrics: { balance: -0.12, consumed: 275.12 },
+    });
+    await notifier!.processRun(store.saveRun(negative), negative);
+
+    const messages = telegram.calls.filter((call) => call.method === "sendMessage");
+    expect(messages).toHaveLength(1);
+    const payload = messages[0].body as { text: string };
+    expect(payload.text).toContain("Low balance after a large decrease");
+    expect(payload.text).toContain("-$0.12");
+    expect(payload.text).toContain("-$33.46");
+  });
+
   test("alerts only after repeated failures and once when monitoring recovers", async () => {
     const { store, telegram, appConfig } = await fixture({
       lowBalanceUsd: 0,

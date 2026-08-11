@@ -29,7 +29,7 @@ const values = history.flatMap((item) => [item.balance, item.consumed]);
 const minimum = Math.min(...values);
 const maximum = Math.max(...values);
 const padding = Math.max(5, (maximum - minimum) * 0.12);
-const minY = Math.max(0, minimum - padding);
+const minY = minimum < 0 ? minimum - padding : Math.max(0, minimum - padding);
 const maxY = maximum + padding;
 const x = (index) => plot.left + (index / (history.length - 1)) * (plot.right - plot.left);
 const y = (value) => plot.bottom - ((value - minY) / Math.max(1, maxY - minY)) * (plot.bottom - plot.top);

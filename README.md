@@ -4,6 +4,8 @@ A Bun + TypeScript service that continuously checks any number of AgentRouter ac
 
 Each cycle uses a dedicated persistent Chromium profile, signs in through GitHub, reads the visible `/console/` and `/console/topup` pages, retries suspicious double-zero money values, saves the result, and confirms logout through the visible **Quit** action. Saved browser profiles retain GitHub device trust while AgentRouter is logged out between checks.
 
+Balances are stored as signed USD values: a legitimate negative balance is retained and alerted as low credit instead of being discarded as malformed data. Consumption remains non-negative.
+
 Telegram notifications are intentionally quiet: every positive balance delta, confirmed credit grants, low-balance crossings, large balance decreases, repeated failures, and recovery. A grant log and its matching balance delta are merged into one event; unexplained increases remain clearly labeled as observations rather than grants. Financial alerts include timing, session/logout evidence, totals, and an account-history graph. Delivery is locked to one verified private Telegram chat and username.
 
 ## Install and run
