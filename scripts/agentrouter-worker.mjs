@@ -1121,6 +1121,61 @@ async function completeAgentRouterAccessVerification(context, page, account, con
   }
 }
 
+async function dismissBlockingOverlays(page) {
+  // AgentRouter occasionally leaves a Semi Design notice modal over the console.
+  // It intercepts pointer events even though the profile button remains visible.
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const modal = page.locator('.semi-modal-wrap, [role="dialog"]');
+    if (!(await modal.first().isVisible().catch(() => false))) return;
+
+    const close = page.locator(
+      '.semi-modal-wrap button[aria-label*="close" i], ' +
+      '.semi-modal-wrap button[aria-label*="关闭"], ' +
+      '.semi-modal-wrap button:has-text("Close"), ' +
+      '.semi-modal-wrap button:has-text("关闭"), ' +
+      '.semi-modal-wrap button:has-text("知道了"), ' +
+      '.semi-modal-wrap button:has-text("取消")',
+    ).first();
+    if (await close.isVisible().catch(() => false)) {
+      await close.click({ force: true, timeoutMs: 3_000 }).catch(() => undefined);
+    } else {
+      await page.locator('body').press('Escape').catch(() => undefined);
+    }
+    await wait(250);
+  }
+}
+
+async function logoutViaApi(page, config, apiCalls) {
+  const started = Date.now();
+  const response = await page.evaluate(async () => {
+    const result = await fetch('/api/user/logout', {
+      method: 'GET',
+      credentials: 'include',
+      headers: { Accept: 'application/json', 'Cache-Control': 'no-store' },
+    });
+    const payload = await result.json().catch(() => null);
+    return {
+      status: result.status,
+      ok: result.ok && payload?.success === true,
+      contentType: result.headers.get('content-type') ?? '',
+    };
+  }).catch(() => null);
+  apiCalls.push({
+    path: '/api/user/logout',
+    status: response?.status ?? 0,
+    ok: response?.ok === true,
+    contentType: response?.contentType ?? '',
+    durationMs: Date.now() - started,
+    source: 'api-logout-fallback',
+  });
+  if (!response?.ok) return false;
+  await page.goto(`${config.baseUrl}/login`, {
+    waitUntil: 'domcontentloaded',
+    timeout: config.requestTimeoutMs,
+  }).catch(() => undefined);
+  return new URL(page.url()).pathname === '/login' && !(await readStoredUser(page));
+}
+
 async function logoutAndPersist(context, page, config, userId, statePath, apiCalls) {
   const started = Date.now();
   let redirectedToLogin = false;
@@ -1130,9 +1185,13 @@ async function logoutAndPersist(context, page, config, userId, statePath, apiCal
       timeout: config.requestTimeoutMs,
     });
     await page.locator("main").waitFor({ state: "visible", timeout: config.requestTimeoutMs });
-    const profileButton = page.getByRole("button", { name: /chevron_down/i }).first();
+    await dismissBlockingOverlays(page);
+    const profileButton = page.locator('button[aria-haspopup="menu"]').first();
     await profileButton.hover().catch(() => undefined);
-    await profileButton.click();
+    await profileButton.click({ timeoutMs: 10_000 }).catch(async () => {
+      await dismissBlockingOverlays(page);
+      await profileButton.click({ force: true, timeoutMs: 5_000 });
+    });
     const quit = page.getByRole("menuitem", { name: /Quit/i }).first();
     await quit.waitFor({ state: "visible", timeout: 10_000 });
     await quit.click();
@@ -1144,6 +1203,9 @@ async function logoutAndPersist(context, page, config, userId, statePath, apiCal
         return false;
       }
     })();
+  }
+  if (!redirectedToLogin && !page.isClosed()) {
+    redirectedToLogin = await logoutViaApi(page, config, apiCalls);
   }
   const loggedOut = redirectedToLogin && !(await readStoredUser(page));
   apiCalls.push({
