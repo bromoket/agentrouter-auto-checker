@@ -150,13 +150,13 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
 .hero-copy > p:not(.eyebrow) { max-width: 600px; color: var(--muted); font-size: 15px; line-height: 1.7; }
 .hero-actions { justify-content: flex-start; margin-top: 26px; }
 .hero-visual { position: relative; width: min(210px, 21vw); aspect-ratio: 1; justify-self: center; display: grid; place-items: center; }
-.core { width: 84px; height: 84px; display: grid; place-items: center; border-radius: 26px; background: var(--gradient); box-shadow: 0 0 55px rgba(168,85,247,.42); transform: rotate(12deg); }
-.core span { font-size: 27px; font-weight: 950; transform: rotate(-12deg); }
-.orbit { --orbit-start: 0deg; position: absolute; inset: 12%; border: 1px solid rgba(216,180,254,.18); border-radius: 50%; animation: orbit-turn 84s linear infinite; will-change: transform; }
+.core { width: 84px; height: 84px; display: grid; place-items: center; border-radius: 50%; background: radial-gradient(circle at 34% 28%, #f5e8ff 0 4%, #d8b4fe 10%, #a855f7 39%, #5b21b6 72%, #2e1065 100%); box-shadow: 0 0 55px rgba(168,85,247,.42), inset -12px -14px 20px rgba(46,16,101,.48), inset 8px 7px 16px rgba(255,255,255,.24); }
+.core span { font-size: 25px; font-weight: 950; text-shadow: 0 1px 8px rgba(46,16,101,.45); }
+.orbit { --orbit-start: 0deg; position: absolute; inset: 12%; border: 1px solid rgba(216,180,254,.18); border-radius: 50%; animation: orbit-turn 37s linear infinite; will-change: transform; }
 .orbit i { position: absolute; top: 4%; left: 50%; width: 12px; height: 12px; border-radius: 50%; background: var(--fuchsia); box-shadow: 0 0 18px var(--fuchsia); }
-.orbit-b { --orbit-start: 40deg; inset: 0; animation-duration: 116s; animation-direction: reverse; }
+.orbit-b { --orbit-start: 40deg; inset: 0; animation-duration: 56s; animation-direction: reverse; }
 .orbit-b i { width: 8px; height: 8px; background: var(--cyan); }
-.orbit-c { --orbit-start: -14deg; inset: 25%; animation-duration: 68s; }
+.orbit-c { --orbit-start: -14deg; inset: 25%; animation-duration: 21s; }
 .orbit-c i { background: #fff; width: 6px; height: 6px; }
 
 .metric-grid { display: grid; grid-template-columns: repeat(6, minmax(0,1fr)); gap: 12px; margin: 14px 0; }

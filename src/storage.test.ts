@@ -76,6 +76,40 @@ describe("Store", () => {
       }),
     ]);
   });
+
+  test("derives a material delta from consecutive successful endpoint observations", () => {
+    const store = createStore();
+    store.saveEndpointObservation({
+      accountId: "account-1",
+      accountLabel: "Account 1",
+      observedAt: "2026-08-15T00:00:00.000Z",
+      status: "ok",
+      balance: -0.23,
+      consumed: 132.5,
+      requestCount: 11,
+      sourcePath: "/api/user/self",
+      latencyMs: 20,
+    });
+    const id = store.saveEndpointObservation({
+      accountId: "account-1",
+      accountLabel: "Account 1",
+      observedAt: "2026-08-15T00:01:00.000Z",
+      status: "ok",
+      balance: 24.77,
+      consumed: 132.5,
+      requestCount: 14,
+      sourcePath: "/api/user/self",
+      latencyMs: 25,
+    });
+
+    expect(store.getEndpointBalanceObservation(id)).toEqual(expect.objectContaining({
+      observationId: id,
+      balanceDelta: 25,
+      consumedDelta: 0,
+      requestCountDelta: 3,
+      minutesSincePrevious: 1,
+    }));
+  });
   test("persists normalized runs and metrics", () => {
     const store = createStore();
     const id = store.saveRun(snapshot());

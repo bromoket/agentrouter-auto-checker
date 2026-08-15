@@ -162,7 +162,13 @@ export class CheckCoordinator {
               continue;
             }
             const observation = await pollAccountEndpoints(account, this.config);
-            this.store.saveEndpointObservation(observation);
+            const observationId = this.store.saveEndpointObservation(observation);
+            if (observation.status === "ok") {
+              const balanceObservation = this.store.getEndpointBalanceObservation(observationId);
+              if (balanceObservation) {
+                await this.telegram?.processEndpointObservation(balanceObservation);
+              }
+            }
             if (observation.status === "error") {
               console.warn(`[endpoint-poll:${account.label}] ${observation.errorMessage}`);
             }

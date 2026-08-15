@@ -4,7 +4,12 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AppConfig, TelegramConfig } from "./config";
-import type { CreditGrantEvent, CreditObservation, RunSnapshot } from "./storage";
+import type {
+  CreditGrantEvent,
+  CreditObservation,
+  EndpointBalanceObservation,
+  RunSnapshot,
+} from "./storage";
 import { Store } from "./storage";
 
 const CHART_SCRIPT = fileURLToPath(new URL("../scripts/telegram-chart.mjs", import.meta.url));
@@ -53,6 +58,11 @@ function money(value: number | null | undefined, signed = false): string {
   if (value === null || value === undefined || !Number.isFinite(value)) return "—";
   const prefix = value < 0 ? "-" : signed && value > 0 ? "+" : "";
   return `${prefix}$${Math.abs(value).toFixed(2)}`;
+}
+
+function signedInteger(value: number): string {
+  if (!Number.isSafeInteger(value)) return "—";
+  return `${value > 0 ? "+" : ""}${value.toLocaleString("en-US")}`;
 }
 
 function elapsed(minutes: number | null): string {
@@ -295,7 +305,7 @@ export class TelegramNotifier {
       ...rows,
       "",
       `<b>Confirmed grants:</b> ${grants.length} · ${money(total)}`,
-      `<b>Rules:</b> positive deltas · grants · balance below ${money(this.config.telegram.lowBalanceUsd)} · drops of ${money(this.config.telegram.largeDropUsd)}+ · ${this.config.telegram.repeatedFailureCount} repeated failures`,
+      `<b>Rules:</b> ${money(this.config.telegram.largeDropUsd)}+ balance movements · confirmed grants · balance below ${money(this.config.telegram.lowBalanceUsd)} · ${this.config.telegram.repeatedFailureCount} repeated failures`,
       `<a href="${escapeHtml(this.config.telegram.dashboardUrl)}">Open dashboard</a>`,
     ].join("\n");
     const chartAccount = accounts.at(0);
@@ -325,6 +335,73 @@ export class TelegramNotifier {
       [],
     );
     if (!sent) throw new Error(`Run ${runId} does not contain a material balance event.`);
+  }
+
+  /**
+   * Endpoint polling has no browser run or grant-log evidence. It can still
+   * report a material balance movement promptly, but always labels it as an
+   * observed change rather than claiming a grant.
+   */
+  async processEndpointObservation(observation: EndpointBalanceObservation): Promise<void> {
+    try {
+      const state = accountState(this.state, observation.accountId);
+      const low = this.config.telegram.lowBalanceUsd > 0 &&
+        observation.balance < this.config.telegram.lowBalanceUsd;
+      const enteredLow = low && !state.lowBalanceActive;
+      const positiveDelta = (observation.balanceDelta ?? 0) > 0;
+      const materialIncrease = positiveDelta && (
+        this.config.telegram.largeDropUsd <= 0 ||
+        (observation.balanceDelta ?? 0) >= this.config.telegram.largeDropUsd
+      );
+      const largeDrop = this.config.telegram.largeDropUsd > 0 &&
+        (observation.balanceDelta ?? 0) <= -this.config.telegram.largeDropUsd;
+
+      if (!enteredLow && !materialIncrease && !largeDrop) {
+        if (state.lowBalanceActive && observation.balance >= this.config.telegram.lowBalanceUsd * 1.1) {
+          state.lowBalanceActive = false;
+        }
+        await this.stateStore.save(this.state);
+        return;
+      }
+
+      const title = materialIncrease
+        ? "💜 <b>AgentRouter balance increased</b>"
+        : enteredLow && largeDrop
+          ? "⚠️ <b>Low balance after a large decrease</b>"
+          : enteredLow
+            ? "⚠️ <b>AgentRouter balance is low</b>"
+            : "📉 <b>Large AgentRouter balance decrease</b>";
+      const requestLine = observation.requestCount === undefined
+        ? []
+        : [
+            `<b>Requests:</b> ${observation.requestCount.toLocaleString("en-US")}`,
+            ...(observation.requestCountDelta === null
+              ? []
+              : [`<b>Request change:</b> ${signedInteger(observation.requestCountDelta)}`]),
+          ];
+      const lines = [
+        title,
+        "",
+        `<b>Account:</b> ${escapeHtml(observation.accountLabel)}`,
+        `<b>Balance:</b> ${money(observation.balance)}`,
+        `<b>Previous balance:</b> ${money(observation.previousBalance)}`,
+        `<b>Balance change:</b> ${money(observation.balanceDelta, true)}`,
+        `<b>Consumed:</b> ${money(observation.consumed)}`,
+        `<b>Consumption change:</b> ${money(observation.consumedDelta, true)}`,
+        ...requestLine,
+        `<b>Interval:</b> ${escapeHtml(elapsed(observation.minutesSincePrevious))}`,
+        "<b>Evidence:</b> read-only endpoint observation; a later browser cycle confirms any grant log.",
+        ...(enteredLow ? [`<b>Low-balance threshold:</b> ${money(this.config.telegram.lowBalanceUsd)}`] : []),
+        `<b>Observed:</b> ${escapeHtml(observedAt(observation.observedAt))}`,
+        "",
+        `<a href="${escapeHtml(this.config.telegram.dashboardUrl)}">Open full analytics</a>`,
+      ];
+      await this.sendRich(observation.accountId, observation.accountLabel, lines.join("\n"));
+      if (low) state.lowBalanceActive = true;
+      await this.stateStore.save(this.state);
+    } catch (error) {
+      console.error(`Telegram endpoint notification skipped: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   private async processFailure(snapshot: RunSnapshot): Promise<void> {
@@ -442,11 +519,15 @@ export class TelegramNotifier {
       observation.balance < this.config.telegram.lowBalanceUsd;
     const enteredLow = low && !state.lowBalanceActive;
     const positiveDelta = (observation.balanceDelta ?? 0) > 0;
+    const materialIncrease = positiveDelta && (
+      this.config.telegram.largeDropUsd <= 0 ||
+      (observation.balanceDelta ?? 0) >= this.config.telegram.largeDropUsd
+    );
     const largeDrop = this.config.telegram.largeDropUsd > 0 &&
       (observation.balanceDelta ?? 0) <= -this.config.telegram.largeDropUsd;
     const capturedGrantAmount = grants.reduce((sum, grant) => sum + grant.amount, 0);
 
-    if (!enteredLow && !largeDrop && !positiveDelta && grants.length === 0) {
+    if (!enteredLow && !largeDrop && !materialIncrease && grants.length === 0) {
       if (
         state.lowBalanceActive &&
         observation.balance >= this.config.telegram.lowBalanceUsd * 1.1
@@ -457,7 +538,7 @@ export class TelegramNotifier {
 
     const title = positiveDelta && grants.length > 0
       ? "🎉 <b>Grant evidence and a balance increase observed</b>"
-      : positiveDelta
+      : materialIncrease
         ? "💜 <b>AgentRouter balance increased</b>"
         : grants.length > 0
           ? "🎉 <b>AgentRouter credit grant confirmed</b>"
@@ -523,7 +604,7 @@ export class TelegramNotifier {
   }
 
   private async renderChart(accountId: string, label: string): Promise<Uint8Array> {
-    const history = this.store.listMetricHistory(accountId, 30)
+    const browserHistory = this.store.listMetricHistory(accountId, 120)
       .filter((item) => item.status === "ok")
       .map((item) => ({
         at: item.startedAt,
@@ -531,6 +612,21 @@ export class TelegramNotifier {
         consumed: Number(item.metrics.consumed),
       }))
       .filter((item) => Number.isFinite(item.balance) && Number.isFinite(item.consumed));
+    const endpointHistory = this.store.listEndpointObservations(accountId, 5_000)
+      .filter((item) => item.status === "ok")
+      .map((item) => ({
+        at: item.observedAt,
+        balance: Number(item.balance),
+        consumed: Number(item.consumed),
+      }))
+      .filter((item) => Number.isFinite(item.balance) && Number.isFinite(item.consumed));
+    const allHistory = [...browserHistory, ...endpointHistory]
+      .sort((left, right) => Date.parse(left.at) - Date.parse(right.at));
+    const history = allHistory.length <= 720
+      ? allHistory
+      : Array.from({ length: 720 }, (_, index) =>
+        allHistory[Math.round(index * (allHistory.length - 1) / 719)]
+      );
     if (history.length < 2) throw new Error("not enough verified history for a graph");
 
     const directory = await mkdtemp(join(tmpdir(), "agentrouter-telegram-chart-"));

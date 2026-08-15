@@ -30,6 +30,7 @@ const state = {
 const PALETTE = ["#a855f7", "#d946ef", "#8b5cf6", "#f472b6", "#67e8f9", "#6ee7b7", "#fbbf24"];
 const OVERVIEW_CHARTS = ["overview-money-chart", "overview-earnings-chart", "overview-accounts-chart"];
 const ACCOUNT_CHARTS = ["money-chart", "duration-chart", "activity-chart", "performance-chart", "model-trend-chart"];
+const MATERIAL_BALANCE_EVENT_USD = 25;
 const byId = (id) => document.getElementById(id);
 
 function element(tag, className, text) {
@@ -315,31 +316,109 @@ function renderTraceRows(container, rows) {
   }
 }
 
+function materialChange(delta) {
+  const threshold = finite(state.overview?.materialBalanceEventUsd, MATERIAL_BALANCE_EVENT_USD);
+  return Math.abs(finite(delta)) >= threshold;
+}
+
+function balanceEventRows(accountLabel, credits = [], grants = [], endpointObservations = []) {
+  const rows = [];
+  const grantsByRun = new Map();
+  for (const grant of grants) {
+    const matched = grantsByRun.get(grant.runId) || [];
+    matched.push(grant);
+    grantsByRun.set(grant.runId, matched);
+  }
+  const representedGrantRuns = new Set();
+  for (const credit of credits) {
+    const matchingGrants = grantsByRun.get(credit.runId) || [];
+    const delta = finite(credit.balanceDelta);
+    if (!materialChange(delta) && !matchingGrants.length) continue;
+    if (matchingGrants.length) representedGrantRuns.add(credit.runId);
+    const grantTotal = matchingGrants.reduce((sum, grant) => sum + finite(grant.amount), 0);
+    const grantDetail = matchingGrants.length ? ` · confirmed grant ${formatMoney(grantTotal)}` : "";
+    rows.push({
+      at: credit.observedAt,
+      stage: delta < 0 ? "decrease" : "increase",
+      accountLabel,
+      message: `Verified browser balance ${delta >= 0 ? "+" : ""}${formatMoney(delta)}${grantDetail}`,
+      className: "trace-archive-line",
+    });
+  }
+  for (const grant of grants) {
+    if (representedGrantRuns.has(grant.runId)) continue;
+    rows.push({
+      at: grant.occurredAt,
+      stage: "grant",
+      accountLabel,
+      message: `Confirmed ${grant.classification.replaceAll("-", " ")} grant ${formatMoney(grant.amount)}`,
+      className: "trace-archive-line",
+    });
+  }
+  const successfulEndpointObservations = endpointObservations
+    .filter((item) => item.status === "ok")
+    .slice()
+    .sort((left, right) => Date.parse(left.observedAt) - Date.parse(right.observedAt));
+  for (let index = 1; index < successfulEndpointObservations.length; index += 1) {
+    const previous = successfulEndpointObservations[index - 1];
+    const current = successfulEndpointObservations[index];
+    const delta = finite(current.balance) - finite(previous.balance);
+    if (!materialChange(delta)) continue;
+    rows.push({
+      at: current.observedAt,
+      stage: delta < 0 ? "decrease" : "increase",
+      accountLabel,
+      message: `Minute-poll balance ${delta >= 0 ? "+" : ""}${formatMoney(delta)} · needs browser grant confirmation`,
+      className: "trace-archive-line",
+    });
+  }
+  return rows;
+}
+
+function materialArchiveRows() {
+  const rows = [];
+  if (state.selectedId) {
+    const account = selectedAccount();
+    if (account) rows.push(...balanceEventRows(account.label, state.credits, state.grants, state.endpointObservations));
+    for (const run of state.runs.filter((item) => item.status === "error")) {
+      rows.push({
+        at: run.startedAt,
+        stage: "error",
+        accountLabel: account?.label || run.accountId,
+        message: conciseError(run.errorMessage || "Check did not complete."),
+        className: "trace-archive-line",
+      });
+    }
+  } else {
+    for (const item of state.overview?.accounts || []) {
+      rows.push(...balanceEventRows(item.account.label, item.credits, item.grants, item.endpointObservations));
+    }
+    for (const run of state.overview?.recentRuns || []) {
+      if (run.status !== "error") continue;
+      rows.push({
+        at: run.startedAt,
+        stage: "error",
+        accountLabel: run.accountLabel,
+        message: conciseError(run.errorMessage || "Check did not complete."),
+        className: "trace-archive-line",
+      });
+    }
+  }
+  return rows.sort((left, right) => Date.parse(right.at) - Date.parse(left.at)).slice(0, 40);
+}
+
 function renderTraceArchive() {
   const archive = byId("trace-archive-list");
   const archiveState = byId("trace-archive-state");
-  const liveEvents = state.coordinator?.events || [];
-  if (liveEvents.length) {
-    archiveState.textContent = state.coordinator?.running ? "Live cycle record" : "Latest cycle record";
-    renderTraceRows(archive, [...liveEvents].reverse().map((event) => ({ ...event, className: "trace-archive-line" })));
+  const rows = materialArchiveRows();
+  if (!rows.length) {
+    archiveState.textContent = "No actionable events";
+    const threshold = finite(state.overview?.materialBalanceEventUsd, MATERIAL_BALANCE_EVENT_USD);
+    archive.replaceChildren(element("p", "trace-archive-empty", `Routine samples are stored for charts and export. This feed only shows ${formatMoney(threshold)}+ movements, confirmed grants, and errors.`));
     return;
   }
-  const persistedRuns = state.selectedId ? state.runs : state.overview?.recentRuns || [];
-  if (!persistedRuns.length) {
-    archiveState.textContent = "No stored checks";
-    archive.replaceChildren(element("p", "trace-archive-empty", "Run a collection cycle to create the first durable record."));
-    return;
-  }
-  archiveState.textContent = "Stored check record";
-  renderTraceRows(archive, persistedRuns.slice(0, 40).map((run) => ({
-    at: run.startedAt,
-    stage: run.status === "ok" ? "complete" : "error",
-    accountLabel: state.accounts.find((account) => account.id === run.accountId)?.label || run.accountId,
-    message: run.status === "ok"
-      ? `Verified snapshot · ${formatDuration(run.totalMs)} · logout ${run.loggedOut ? "confirmed" : "not confirmed"}`
-      : conciseError(run.errorMessage || "Check did not complete."),
-    className: "trace-archive-line",
-  })));
+  archiveState.textContent = "Material events";
+  renderTraceRows(archive, rows);
 }
 
 function renderCoordinator() {
@@ -404,7 +483,7 @@ function renderCoordinator() {
       ? `${coordinator.currentAccountLabel} · ${coordinator.completedAccounts}/${coordinator.totalAccounts} completed`
       : `${coordinator.completedAccounts || 0}/${coordinator.totalAccounts || 0} completed`;
     byId("run-progress").style.width = `${Math.min(100, Math.max(0, finite(coordinator.progressPercent)))}%`;
-    renderTraceRows(byId("terminal-events"), events.slice(-40));
+    renderTraceRows(byId("terminal-events"), events.filter((event) => event.stage === "error").slice(-40));
   }
   byId("toggle-console-size").textContent = state.liveConsoleExpanded ? "Compact" : "Expand";
   byId("toggle-console-size").setAttribute("aria-expanded", String(state.liveConsoleExpanded));

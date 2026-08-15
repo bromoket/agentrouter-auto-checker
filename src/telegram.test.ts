@@ -162,6 +162,43 @@ describe("TelegramNotifier", () => {
     expect(payload.text.length).toBeLessThanOrEqual(1_024);
   });
 
+  test("alerts once for a material endpoint increase without mislabeling it as a grant", async () => {
+    const { store, telegram, appConfig } = await fixture();
+    store.saveEndpointObservation({
+      accountId: "account-1",
+      accountLabel: "Primary",
+      observedAt: "2026-08-15T00:00:00.000Z",
+      status: "ok",
+      balance: 100,
+      consumed: 75,
+      requestCount: 20,
+      sourcePath: "/api/user/self",
+      latencyMs: 20,
+    });
+    const notifier = await TelegramNotifier.create(appConfig, store, telegram.fetcher);
+    const id = store.saveEndpointObservation({
+      accountId: "account-1",
+      accountLabel: "Primary",
+      observedAt: "2026-08-15T00:01:00.000Z",
+      status: "ok",
+      balance: 125,
+      consumed: 75,
+      requestCount: 23,
+      sourcePath: "/api/user/self",
+      latencyMs: 20,
+    });
+
+    await notifier!.processEndpointObservation(store.getEndpointBalanceObservation(id)!);
+
+    const messages = telegram.calls.filter((call) => call.method === "sendMessage");
+    expect(messages).toHaveLength(1);
+    const payload = messages[0].body as { text: string };
+    expect(payload.text).toContain("+$25.00");
+    expect(payload.text).toContain("read-only endpoint observation");
+    expect(payload.text).not.toContain("grant confirmed");
+    expect(payload.text).toContain("Request change:</b> +3");
+  });
+
   test("can replay a previously missed positive balance observation", async () => {
     const { store, telegram, appConfig } = await fixture();
     store.saveRun(snapshot("2026-08-09T10:00:00.000Z", 100));

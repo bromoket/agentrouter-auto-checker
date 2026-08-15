@@ -71,6 +71,24 @@ export interface EndpointObservation {
   errorMessage?: string;
 }
 
+/** A successful read-only observation paired with its prior successful sample. */
+export interface EndpointBalanceObservation {
+  observationId: number;
+  accountId: string;
+  accountLabel: string;
+  observedAt: string;
+  balance: number;
+  consumed: number;
+  requestCount?: number;
+  previousBalance: number | null;
+  previousConsumed: number | null;
+  previousRequestCount: number | null;
+  balanceDelta: number | null;
+  consumedDelta: number | null;
+  requestCountDelta: number | null;
+  minutesSincePrevious: number | null;
+}
+
 interface RawRunSnapshot {
   id: number;
   account_id: string;
@@ -339,6 +357,64 @@ export class Store {
       latencyMs: row.latency_ms,
       errorMessage: row.error_message ?? undefined,
     }));
+  }
+
+  getEndpointBalanceObservation(observationId: number): EndpointBalanceObservation | null {
+    if (!Number.isSafeInteger(observationId) || observationId <= 0) return null;
+    const current = this.db.prepare(`
+      SELECT id, account_id, account_label, observed_at, balance, consumed, request_count
+      FROM endpoint_observations
+      WHERE id = ? AND status = 'ok'
+    `).get(observationId) as {
+      id: number;
+      account_id: string;
+      account_label: string;
+      observed_at: string;
+      balance: number | null;
+      consumed: number | null;
+      request_count: number | null;
+    } | null;
+    if (!current || !Number.isFinite(current.balance) || !Number.isFinite(current.consumed)) return null;
+    const balance = Number(current.balance);
+    const consumed = Number(current.consumed);
+    const requestCount = Number.isSafeInteger(current.request_count) ? Number(current.request_count) : undefined;
+    const previous = this.db.prepare(`
+      SELECT observed_at, balance, consumed, request_count
+      FROM endpoint_observations
+      WHERE account_id = ? AND status = 'ok' AND id < ?
+      ORDER BY id DESC
+      LIMIT 1
+    `).get(current.account_id, current.id) as {
+      observed_at: string;
+      balance: number | null;
+      consumed: number | null;
+      request_count: number | null;
+    } | null;
+    const previousBalance = Number.isFinite(previous?.balance) ? previous!.balance : null;
+    const previousConsumed = Number.isFinite(previous?.consumed) ? previous!.consumed : null;
+    const previousRequestCount = Number.isSafeInteger(previous?.request_count) ? previous!.request_count : null;
+    const previousAt = previous ? Date.parse(previous.observed_at) : Number.NaN;
+    const currentAt = Date.parse(current.observed_at);
+    return {
+      observationId: current.id,
+      accountId: current.account_id,
+      accountLabel: current.account_label,
+      observedAt: current.observed_at,
+      balance,
+      consumed,
+      requestCount,
+      previousBalance,
+      previousConsumed,
+      previousRequestCount,
+      balanceDelta: previousBalance === null ? null : balance - previousBalance,
+      consumedDelta: previousConsumed === null ? null : consumed - previousConsumed,
+      requestCountDelta: previousRequestCount === null || requestCount === undefined
+        ? null
+        : requestCount - previousRequestCount,
+      minutesSincePrevious: Number.isFinite(previousAt) && Number.isFinite(currentAt)
+        ? Math.max(0, (currentAt - previousAt) / 60_000)
+        : null,
+    };
   }
 
   private backfillCreditObservations(): void {

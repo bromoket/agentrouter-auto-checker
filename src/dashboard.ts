@@ -221,6 +221,7 @@ export function startDashboard(
           const recentRuns = store.listRuns(100);
           return json({
             generatedAt: new Date().toISOString(),
+            materialBalanceEventUsd: config.telegram.largeDropUsd,
             accounts: accountData,
             totals: {
               configuredAccounts: accounts.length,
