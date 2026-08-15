@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { pollAccountEndpoints } from "./endpoint-poller";
+import { hasMonitorSession, pollAccountEndpoints } from "./endpoint-poller";
 import type { GitHubAccount } from "./accounts";
 import type { AppConfig } from "./config";
 
@@ -33,6 +33,16 @@ async function configWithMonitorState(): Promise<AppConfig> {
 }
 
 describe("pollAccountEndpoints", () => {
+  it("waits quietly for the first browser cycle to capture a monitor session", async () => {
+    const accountStateDir = await mkdtemp(join(tmpdir(), "agentrouter-endpoint-test-"));
+    temporaryDirectories.push(accountStateDir);
+    const config = { accountStateDir } as AppConfig;
+
+    expect(await hasMonitorSession(account, config)).toBe(false);
+    await writeFile(join(accountStateDir, `${account.id}.monitor.json`), "{}");
+    expect(await hasMonitorSession(account, config)).toBe(true);
+  });
+
   it("derives signed balance and consumption from AgentRouter session quota responses", async () => {
     globalThis.fetch = (async (input: string | URL | Request) => {
       const path = new URL(String(input)).pathname;

@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { GitHubAccount } from "./accounts";
 import type { AppConfig } from "./config";
@@ -70,6 +70,20 @@ async function loadSessionAuth(path: string, baseUrl: string): Promise<{ cookie:
   }
   if (!userId) throw new Error("Saved AgentRouter session does not include a valid user id.");
   return { cookie: cookies.map((cookie) => `${cookie.name}=${cookie.value}`).join("; "), userId };
+}
+
+/**
+ * A fresh installation deliberately has no read-only polling session until the
+ * first verified browser cycle has captured it. Treat that bootstrap state as
+ * pending rather than recording an avoidable endpoint failure every minute.
+ */
+export async function hasMonitorSession(account: GitHubAccount, config: AppConfig): Promise<boolean> {
+  try {
+    await access(join(config.accountStateDir, `${account.id}.monitor.json`));
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export async function pollAccountEndpoints(

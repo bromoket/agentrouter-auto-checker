@@ -9,7 +9,7 @@ import { SettingsStore } from "./settings";
 import type { RunSnapshot } from "./storage";
 import { Store } from "./storage";
 import type { TelegramNotifier } from "./telegram";
-import { pollAccountEndpoints } from "./endpoint-poller";
+import { hasMonitorSession, pollAccountEndpoints } from "./endpoint-poller";
 
 export interface CoordinatorStatus {
   running: boolean;
@@ -155,6 +155,12 @@ export class CheckCoordinator {
             (account) => account.enabled && Boolean(account.agentRouterApiToken),
           );
           for (const account of accounts) {
+            if (!await hasMonitorSession(account, this.config)) {
+              // The first browser cycle creates this short-lived, private
+              // session snapshot. Until then there is nothing read-only to
+              // poll, and an error observation would be misleading.
+              continue;
+            }
             const observation = await pollAccountEndpoints(account, this.config);
             this.store.saveEndpointObservation(observation);
             if (observation.status === "error") {
