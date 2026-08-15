@@ -18,44 +18,43 @@ interface StorageStateOrigin {
 
 const READ_ONLY_PATHS = ["/api/user/self"] as const;
 
-async function pollBearerBilling(
+async function pollDashboardBalance(
   account: GitHubAccount,
   config: AppConfig,
   signal: AbortSignal,
 ): Promise<{ balance: number; consumed: number; sourcePath: string } | null> {
-  if (!account.agentRouterApiToken) return null;
-  const headers = { accept: "application/json", authorization: `Bearer ${account.agentRouterApiToken}` };
+  if (!account.agentRouterDashboardToken) return null;
+  const headers = { accept: "application/json", authorization: `Bearer ${account.agentRouterDashboardToken}` };
   const request = (path: string) => fetch(new URL(path, config.baseUrl), {
     headers,
     redirect: "manual",
     signal,
   });
-  const [subscriptionResponse, usageResponse] = await Promise.all([
-    request("/v1/dashboard/billing/subscription"),
-    request("/v1/dashboard/billing/usage"),
+  const [selfResponse, statusResponse] = await Promise.all([
+    request("/api/user/self"),
+    request("/api/status"),
   ]);
-  for (const response of [subscriptionResponse, usageResponse]) {
+  for (const response of [selfResponse, statusResponse]) {
     const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
     if (!response.ok || !contentType.includes("application/json")) {
-      throw new Error(`Bearer billing returned HTTP ${response.status} (${contentType || "unknown content type"}).`);
+      throw new Error(`Dashboard token endpoint returned HTTP ${response.status} (${contentType || "unknown content type"}).`);
     }
   }
-  const subscription: unknown = await subscriptionResponse.json();
-  const usage: unknown = await usageResponse.json();
-  if (asRecord(subscription)?.error) {
-    throw new Error("Bearer subscription endpoint returned an API error.");
+  const self: unknown = await selfResponse.json();
+  const status: unknown = await statusResponse.json();
+  if (asRecord(self)?.success !== true || asRecord(status)?.success !== true) {
+    throw new Error("Dashboard token endpoint returned an API error.");
   }
-  if (asRecord(usage)?.error) throw new Error("Bearer usage endpoint returned an API error.");
-  const total = findNumber(subscription, ["hard_limit_usd", "system_hard_limit_usd"]);
-  const usageCents = findNumber(usage, ["total_usage"]);
-  if (total === undefined || usageCents === undefined || usageCents < 0) {
-    throw new Error("Bearer billing response did not contain valid quota and usage values.");
+  const quotaPerUnit = findNumber(status, ["quota_per_unit", "quotaPerUnit"]);
+  const quota = findNumber(self, ["quota"]);
+  const usedQuota = findNumber(self, ["used_quota", "usedQuota"]);
+  if (!quotaPerUnit || quota === undefined || usedQuota === undefined || usedQuota < 0) {
+    throw new Error("Dashboard token endpoint did not expose valid quota values.");
   }
-  const consumed = usageCents / 100;
   return {
-    balance: total - consumed,
-    consumed,
-    sourcePath: "/v1/dashboard/billing/subscription + /v1/dashboard/billing/usage",
+    balance: quota / quotaPerUnit,
+    consumed: usedQuota / quotaPerUnit,
+    sourcePath: "/api/user/self + /api/status (dashboard access token)",
   };
 }
 
@@ -124,7 +123,7 @@ export async function pollAccountEndpoints(
       signal ?? new AbortController().signal,
       AbortSignal.timeout(config.requestTimeoutMs),
     ]);
-    const billing = await pollBearerBilling(account, config, combinedSignal);
+    const billing = await pollDashboardBalance(account, config, combinedSignal);
     if (billing) {
       return {
         accountId: account.id,

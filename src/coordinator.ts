@@ -317,6 +317,20 @@ export class CheckCoordinator {
             });
           }
         }
+        const capturedDashboardAccessToken = snapshot.capturedDashboardAccessToken;
+        if (capturedDashboardAccessToken) {
+          delete snapshot.capturedDashboardAccessToken;
+          try {
+            await this.accounts.setDashboardAccessToken(account.id, capturedDashboardAccessToken);
+          } catch (error) {
+            this.appendEvent({
+              stage: "dashboard-token-save-warning",
+              message: `Data captured, but the dashboard access token could not be saved: ${error instanceof Error ? error.message : "unknown error"}`,
+              percent: this.status.progressPercent,
+              at: new Date().toISOString(),
+            });
+          }
+        }
         const runId = this.store.saveRun(snapshot);
         await this.telegram?.processRun(runId, snapshot);
         this.status.completedAccounts += 1;

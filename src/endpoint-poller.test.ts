@@ -11,7 +11,7 @@ const account: GitHubAccount = {
   label: "test",
   githubUsername: "test-user",
   githubPassword: "secret",
-  agentRouterApiToken: `sk-${"a".repeat(32)}`,
+  agentRouterDashboardToken: "a".repeat(32),
   enabled: true,
   runOrder: 0,
 };
@@ -23,17 +23,17 @@ const config = {
 } as AppConfig;
 
 describe("pollAccountEndpoints", () => {
-  it("derives remaining balance from the bearer billing responses", async () => {
+  it("derives signed balance and consumption from dashboard-token quota responses", async () => {
     globalThis.fetch = (async (input: string | URL | Request) => {
       const path = new URL(String(input)).pathname;
-      return path.endsWith("subscription")
-        ? Response.json({ hard_limit_usd: 400 })
-        : Response.json({ total_usage: 13_250 });
+      return path.endsWith("/api/user/self")
+        ? Response.json({ success: true, data: { quota: -115_000, used_quota: 69_975_000 } })
+        : Response.json({ success: true, data: { quota_per_unit: 500_000 } });
     }) as unknown as typeof fetch;
     const result = await pollAccountEndpoints(account, config);
     expect(result.status).toBe("ok");
-    expect(result.balance).toBe(267.5);
-    expect(result.consumed).toBe(132.5);
+    expect(result.balance).toBe(-0.23);
+    expect(result.consumed).toBe(139.95);
   });
 
   it("rejects HTML/WAF responses without parsing them as account data", async () => {

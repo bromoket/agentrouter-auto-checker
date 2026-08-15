@@ -1224,6 +1224,38 @@ async function captureAgentRouterApiToken(page, config, userId, apiCalls) {
   return candidates[0]?.key.trim() || null;
 }
 
+async function captureDashboardAccessToken(page, userId, apiCalls) {
+  const started = Date.now();
+  const response = await page.evaluate(async (numericUserId) => {
+    const result = await fetch('/api/user/token', {
+      credentials: 'include',
+      headers: {
+        Accept: 'application/json',
+        'Cache-Control': 'no-store',
+        'New-API-User': String(numericUserId),
+      },
+    });
+    const payload = await result.json().catch(() => null);
+    return {
+      status: result.status,
+      ok: result.ok,
+      token: typeof payload?.data === 'string' ? payload.data.trim() : '',
+      success: payload?.success === true,
+    };
+  }, userId).catch(() => null);
+  apiCalls.push({
+    path: '/api/user/token',
+    method: 'GET',
+    status: response?.status ?? 0,
+    ok: Boolean(response?.ok && response?.success),
+    latencyMs: Date.now() - started,
+    contentType: 'application/json',
+  });
+  return response?.ok && response?.success && /^[A-Za-z0-9_-]{20,256}$/.test(response.token)
+    ? response.token
+    : null;
+}
+
 async function logoutAndPersist(context, page, config, userId, statePath, apiCalls) {
   const started = Date.now();
   let redirectedToLogin = false;
@@ -1509,6 +1541,11 @@ async function runWorker({ account, config }) {
     result.capturedApiToken = await captureAgentRouterApiToken(
       activePage,
       config,
+      authenticatedUserId,
+      result.apiCalls,
+    ) ?? undefined;
+    result.capturedDashboardAccessToken = await captureDashboardAccessToken(
+      activePage,
       authenticatedUserId,
       result.apiCalls,
     ) ?? undefined;

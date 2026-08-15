@@ -55,6 +55,7 @@ export interface RunSnapshot {
   errorMessage?: string;
   screenshotPath?: string;
   capturedApiToken?: string;
+  capturedDashboardAccessToken?: string;
 }
 
 export interface EndpointObservation {
