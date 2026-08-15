@@ -1,26 +1,36 @@
 import { afterEach, describe, expect, it } from "bun:test";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { pollAccountEndpoints } from "./endpoint-poller";
 import type { GitHubAccount } from "./accounts";
 import type { AppConfig } from "./config";
 
 const originalFetch = globalThis.fetch;
-afterEach(() => { globalThis.fetch = originalFetch; });
+const temporaryDirectories: string[] = [];
+afterEach(async () => {
+  globalThis.fetch = originalFetch;
+  await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
+});
 
 const account: GitHubAccount = {
   id: "test",
   label: "test",
   githubUsername: "test-user",
   githubPassword: "secret",
-  agentRouterDashboardToken: "a".repeat(32),
   enabled: true,
   runOrder: 0,
 };
 
-const config = {
-  baseUrl: "https://agentrouter.org",
-  requestTimeoutMs: 1_000,
-  accountStateDir: "unused",
-} as AppConfig;
+async function configWithMonitorState(): Promise<AppConfig> {
+  const accountStateDir = await mkdtemp(join(tmpdir(), "agentrouter-endpoint-test-"));
+  temporaryDirectories.push(accountStateDir);
+  await writeFile(join(accountStateDir, `${account.id}.monitor.json`), JSON.stringify({
+    cookies: [{ name: "session", value: "test-cookie", domain: "agentrouter.org", expires: -1 }],
+    origins: [{ origin: "https://agentrouter.org", localStorage: [{ name: "user", value: "{\"id\":1}" }] }],
+  }));
+  return { baseUrl: "https://agentrouter.org", requestTimeoutMs: 1_000, accountStateDir } as AppConfig;
+}
 
 describe("pollAccountEndpoints", () => {
   it("derives signed balance and consumption from dashboard-token quota responses", async () => {
@@ -30,7 +40,7 @@ describe("pollAccountEndpoints", () => {
         ? Response.json({ success: true, data: { quota: -115_000, used_quota: 69_975_000 } })
         : Response.json({ success: true, data: { quota_per_unit: 500_000 } });
     }) as unknown as typeof fetch;
-    const result = await pollAccountEndpoints(account, config);
+    const result = await pollAccountEndpoints(account, await configWithMonitorState());
     expect(result.status).toBe("ok");
     expect(result.balance).toBe(-0.23);
     expect(result.consumed).toBe(139.95);
@@ -41,7 +51,7 @@ describe("pollAccountEndpoints", () => {
       status: 403,
       headers: { "content-type": "text/html" },
     })) as unknown as typeof fetch;
-    const result = await pollAccountEndpoints(account, config);
+    const result = await pollAccountEndpoints(account, await configWithMonitorState());
     expect(result.status).toBe("error");
     expect(result.errorMessage).toContain("HTTP 403");
   });

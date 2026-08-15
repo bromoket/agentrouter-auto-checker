@@ -18,46 +18,6 @@ interface StorageStateOrigin {
 
 const READ_ONLY_PATHS = ["/api/user/self"] as const;
 
-async function pollDashboardBalance(
-  account: GitHubAccount,
-  config: AppConfig,
-  signal: AbortSignal,
-): Promise<{ balance: number; consumed: number; sourcePath: string } | null> {
-  if (!account.agentRouterDashboardToken) return null;
-  const headers = { accept: "application/json", authorization: `Bearer ${account.agentRouterDashboardToken}` };
-  const request = (path: string) => fetch(new URL(path, config.baseUrl), {
-    headers,
-    redirect: "manual",
-    signal,
-  });
-  const [selfResponse, statusResponse] = await Promise.all([
-    request("/api/user/self"),
-    request("/api/status"),
-  ]);
-  for (const response of [selfResponse, statusResponse]) {
-    const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
-    if (!response.ok || !contentType.includes("application/json")) {
-      throw new Error(`Dashboard token endpoint returned HTTP ${response.status} (${contentType || "unknown content type"}).`);
-    }
-  }
-  const self: unknown = await selfResponse.json();
-  const status: unknown = await statusResponse.json();
-  if (asRecord(self)?.success !== true || asRecord(status)?.success !== true) {
-    throw new Error("Dashboard token endpoint returned an API error.");
-  }
-  const quotaPerUnit = findNumber(status, ["quota_per_unit", "quotaPerUnit"]);
-  const quota = findNumber(self, ["quota"]);
-  const usedQuota = findNumber(self, ["used_quota", "usedQuota"]);
-  if (!quotaPerUnit || quota === undefined || usedQuota === undefined || usedQuota < 0) {
-    throw new Error("Dashboard token endpoint did not expose valid quota values.");
-  }
-  return {
-    balance: quota / quotaPerUnit,
-    consumed: usedQuota / quotaPerUnit,
-    sourcePath: "/api/user/self + /api/status (dashboard access token)",
-  };
-}
-
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
@@ -123,19 +83,8 @@ export async function pollAccountEndpoints(
       signal ?? new AbortController().signal,
       AbortSignal.timeout(config.requestTimeoutMs),
     ]);
-    const billing = await pollDashboardBalance(account, config, combinedSignal);
-    if (billing) {
-      return {
-        accountId: account.id,
-        accountLabel: account.label,
-        observedAt: new Date().toISOString(),
-        status: "ok",
-        ...billing,
-        latencyMs: Date.now() - startedAt,
-      };
-    }
     const sessionAuth = await loadSessionAuth(
-      join(config.accountStateDir, `${account.id}.json`),
+      join(config.accountStateDir, `${account.id}.monitor.json`),
       config.baseUrl,
     );
     let lastError = "No endpoint returned parseable account values.";

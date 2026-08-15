@@ -8,7 +8,6 @@ export interface GitHubAccount {
   githubUsername: string;
   githubPassword: string;
   agentRouterApiToken?: string;
-  agentRouterDashboardToken?: string;
   enabled: boolean;
   runOrder: number;
 }
@@ -20,7 +19,6 @@ export interface PublicAccount {
   enabled: boolean;
   hasPassword: boolean;
   hasApiToken: boolean;
-  hasDashboardAccessToken: boolean;
   runOrder: number;
 }
 
@@ -30,7 +28,6 @@ export interface AccountInput {
   githubUsername?: unknown;
   githubPassword?: unknown;
   agentRouterApiToken?: unknown;
-  agentRouterDashboardToken?: unknown;
   enabled?: unknown;
   runOrder?: unknown;
 }
@@ -60,9 +57,6 @@ function validateStoredAccount(value: unknown, index: number): GitHubAccount {
   const agentRouterApiToken = typeof candidate.agentRouterApiToken === "string"
     ? candidate.agentRouterApiToken.trim()
     : undefined;
-  const agentRouterDashboardToken = typeof candidate.agentRouterDashboardToken === "string"
-    ? candidate.agentRouterDashboardToken.trim()
-    : undefined;
   const label = asTrimmedString(candidate.label) || githubUsername;
   const requestedOrder = Number(candidate.runOrder);
   const runOrder = Number.isSafeInteger(requestedOrder) && requestedOrder >= 0
@@ -81,9 +75,6 @@ function validateStoredAccount(value: unknown, index: number): GitHubAccount {
   if (agentRouterApiToken && (!/^[A-Za-z0-9_-]{20,256}$/.test(agentRouterApiToken))) {
     throw new Error(`Account ${index + 1} has an invalid AgentRouter API token.`);
   }
-  if (agentRouterDashboardToken && (!/^[A-Za-z0-9_-]{20,256}$/.test(agentRouterDashboardToken))) {
-    throw new Error(`Account ${index + 1} has an invalid AgentRouter dashboard token.`);
-  }
   if (label.length > 80) {
     throw new Error(`Account ${index + 1} has a label longer than 80 characters.`);
   }
@@ -94,7 +85,6 @@ function validateStoredAccount(value: unknown, index: number): GitHubAccount {
     githubUsername,
     githubPassword,
     agentRouterApiToken,
-    agentRouterDashboardToken,
     enabled: candidate.enabled !== false,
     runOrder,
   };
@@ -140,7 +130,6 @@ function publicAccount(account: GitHubAccount): PublicAccount {
     enabled: account.enabled,
     hasPassword: account.githubPassword.length > 0,
     hasApiToken: Boolean(account.agentRouterApiToken),
-    hasDashboardAccessToken: Boolean(account.agentRouterDashboardToken),
     runOrder: account.runOrder,
   };
 }
@@ -229,16 +218,6 @@ export class AccountStore {
   async getApiToken(id: string): Promise<string | null> {
     if (!ID_PATTERN.test(id)) return null;
     return (await this.load()).find((account) => account.id === id)?.agentRouterApiToken ?? null;
-  }
-
-  async setDashboardAccessToken(id: string, token: string): Promise<boolean> {
-    if (!ID_PATTERN.test(id) || !/^[A-Za-z0-9_-]{20,256}$/.test(token)) return false;
-    const accounts = await this.load();
-    const index = accounts.findIndex((account) => account.id === id);
-    if (index < 0) return false;
-    accounts[index] = { ...accounts[index], agentRouterDashboardToken: token };
-    await this.write(accounts);
-    return true;
   }
 
   async upsert(input: AccountInput): Promise<PublicAccount> {

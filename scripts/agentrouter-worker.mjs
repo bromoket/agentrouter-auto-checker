@@ -213,6 +213,33 @@ async function persistGithubState(context, statePath) {
   }
 }
 
+function filterAgentRouterState(state, baseUrl) {
+  const host = new URL(baseUrl).hostname.toLowerCase();
+  return {
+    cookies: state.cookies.filter((cookie) => {
+      const domain = cookie.domain.replace(/^\./, "").toLowerCase();
+      return host === domain || host.endsWith(`.${domain}`);
+    }),
+    origins: state.origins.filter((entry) => entry.origin === baseUrl),
+  };
+}
+
+async function persistAgentRouterState(context, statePath, baseUrl) {
+  const state = filterAgentRouterState(await context.storageState(), baseUrl);
+  if (state.cookies.length === 0) {
+    throw new Error("Authenticated AgentRouter state did not contain reusable cookies.");
+  }
+  const temporaryPath = `${statePath}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    await writeFile(temporaryPath, `${JSON.stringify(state)}\n`, { mode: 0o600, flag: "wx" });
+    await restrictSecretFile(temporaryPath);
+    await rename(temporaryPath, statePath);
+    await restrictSecretFile(statePath);
+  } finally {
+    await unlink(temporaryPath).catch(() => undefined);
+  }
+}
+
 async function markProfileReady(profilePath) {
   const markerPath = path.join(profilePath, ".agentrouter-profile-ready");
   await writeFile(markerPath, `${new Date().toISOString()}\n`, { mode: 0o600 });
@@ -1224,38 +1251,6 @@ async function captureAgentRouterApiToken(page, config, userId, apiCalls) {
   return candidates[0]?.key.trim() || null;
 }
 
-async function captureDashboardAccessToken(page, userId, apiCalls) {
-  const started = Date.now();
-  const response = await page.evaluate(async (numericUserId) => {
-    const result = await fetch('/api/user/token', {
-      credentials: 'include',
-      headers: {
-        Accept: 'application/json',
-        'Cache-Control': 'no-store',
-        'New-API-User': String(numericUserId),
-      },
-    });
-    const payload = await result.json().catch(() => null);
-    return {
-      status: result.status,
-      ok: result.ok,
-      token: typeof payload?.data === 'string' ? payload.data.trim() : '',
-      success: payload?.success === true,
-    };
-  }, userId).catch(() => null);
-  apiCalls.push({
-    path: '/api/user/token',
-    method: 'GET',
-    status: response?.status ?? 0,
-    ok: Boolean(response?.ok && response?.success),
-    latencyMs: Date.now() - started,
-    contentType: 'application/json',
-  });
-  return response?.ok && response?.success && /^[A-Za-z0-9_-]{20,256}$/.test(response.token)
-    ? response.token
-    : null;
-}
-
 async function logoutAndPersist(context, page, config, userId, statePath, apiCalls) {
   const started = Date.now();
   let redirectedToLogin = false;
@@ -1309,6 +1304,7 @@ async function logoutAndPersist(context, page, config, userId, statePath, apiCal
 async function runWorker({ account, config }) {
   const startedAt = new Date().toISOString();
   const statePath = path.join(config.accountStateDir, `${account.id}.json`);
+  const monitorStatePath = path.join(config.accountStateDir, `${account.id}.monitor.json`);
   const profilePath = path.join(config.browserProfileDir, account.id);
   const profileMarkerPath = path.join(profilePath, ".agentrouter-profile-ready");
   const result = {
@@ -1544,13 +1540,9 @@ async function runWorker({ account, config }) {
       authenticatedUserId,
       result.apiCalls,
     ) ?? undefined;
-    result.capturedDashboardAccessToken = await captureDashboardAccessToken(
-      activePage,
-      authenticatedUserId,
-      result.apiCalls,
-    ) ?? undefined;
+    await persistAgentRouterState(context, monitorStatePath, config.baseUrl);
 
-    progress("logging-out", "Token captured. Verifying AgentRouter logout.", 92);
+    progress("logging-out", "Token and minute-poll session captured. Verifying AgentRouter logout.", 92);
     result.loggedOut = await logoutAndPersist(
       context,
       activePage,
