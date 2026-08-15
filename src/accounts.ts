@@ -27,7 +27,6 @@ export interface AccountInput {
   label?: unknown;
   githubUsername?: unknown;
   githubPassword?: unknown;
-  agentRouterApiToken?: unknown;
   enabled?: unknown;
   runOrder?: unknown;
 }
@@ -231,10 +230,6 @@ export class AccountStore {
     const githubUsername = asTrimmedString(input.githubUsername) || existing?.githubUsername || "";
     const suppliedPassword = typeof input.githubPassword === "string" ? input.githubPassword : "";
     const githubPassword = suppliedPassword || existing?.githubPassword || "";
-    const suppliedApiToken = typeof input.agentRouterApiToken === "string"
-      ? input.agentRouterApiToken.trim()
-      : "";
-    const agentRouterApiToken = suppliedApiToken || existing?.agentRouterApiToken;
     const label = asTrimmedString(input.label) || existing?.label || githubUsername;
     const id = existing?.id || (requestedId && ID_PATTERN.test(requestedId)
       ? requestedId
@@ -246,7 +241,7 @@ export class AccountStore {
         label,
         githubUsername,
         githubPassword,
-        agentRouterApiToken,
+        agentRouterApiToken: existing?.agentRouterApiToken,
         enabled: typeof input.enabled === "boolean" ? input.enabled : existing?.enabled ?? true,
         runOrder: input.runOrder ?? existing?.runOrder ?? accounts.length,
       },

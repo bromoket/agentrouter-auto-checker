@@ -1,4 +1,4 @@
-import { rm, unlink } from "node:fs/promises";
+import { readdir, rm, unlink } from "node:fs/promises";
 import { basename, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AccountInput } from "./accounts";
@@ -365,17 +365,38 @@ export function startDashboard(
           const removed = await accountStore.remove(id);
           if (!removed) return errorResponse("Account not found.", 404);
           challenges.cancelAccount(id);
-          const statePath = resolve(config.accountStateDir, `${id}.json`);
           const stateRoot = `${resolve(config.accountStateDir)}${sep}`;
-          if (statePath.startsWith(stateRoot)) {
-            await unlink(statePath).catch((error) => {
-              if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-            });
+          const statePaths = [`${id}.json`, `${id}.monitor.json`].map((name) =>
+            resolve(config.accountStateDir, name)
+          );
+          for (const statePath of statePaths) {
+            if (statePath.startsWith(stateRoot)) {
+              await unlink(statePath).catch((error) => {
+                if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+              });
+            }
           }
           const profilePath = resolve(config.browserProfileDir, id);
           const profileRoot = `${resolve(config.browserProfileDir)}${sep}`;
           if (profilePath.startsWith(profileRoot)) {
             await rm(profilePath, { recursive: true, force: true });
+          }
+          // Captures are private account material too. Only delete the exact
+          // filename prefix the worker creates for this validated account id.
+          const screenshotPrefix = `${id}-`;
+          const screenshots = await readdir(config.screenshotDir, { withFileTypes: true }).catch((error) => {
+            if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+            throw error;
+          });
+          for (const entry of screenshots) {
+            if (!entry.isFile() || !entry.name.startsWith(screenshotPrefix) || !entry.name.endsWith(".png")) {
+              continue;
+            }
+            const screenshotPath = resolve(config.screenshotDir, entry.name);
+            const screenshotRoot = `${resolve(config.screenshotDir)}${sep}`;
+            if (screenshotPath.startsWith(screenshotRoot)) {
+              await unlink(screenshotPath);
+            }
           }
           return json({ removed: true });
         }

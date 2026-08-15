@@ -33,7 +33,7 @@ async function configWithMonitorState(): Promise<AppConfig> {
 }
 
 describe("pollAccountEndpoints", () => {
-  it("derives signed balance and consumption from dashboard-token quota responses", async () => {
+  it("derives signed balance and consumption from AgentRouter session quota responses", async () => {
     globalThis.fetch = (async (input: string | URL | Request) => {
       const path = new URL(String(input)).pathname;
       return path.endsWith("/api/user/self")

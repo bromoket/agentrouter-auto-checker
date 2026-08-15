@@ -13,11 +13,11 @@ EnvironmentFile=/etc/agentrouter-monitor/env
 Environment=HOME=/var/lib/agentrouter-monitor
 Environment=XDG_CACHE_HOME=/var/lib/agentrouter-monitor/cache
 Environment=PLAYWRIGHT_BROWSERS_PATH=/var/lib/agentrouter-monitor/ms-playwright
-ExecStart=/usr/local/bin/bun run start
+ExecStart=/opt/agentrouter-monitor/scripts/start-server.sh
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=45
-KillMode=mixed
+KillMode=control-group
 UMask=0077
 
 StateDirectory=agentrouter-monitor

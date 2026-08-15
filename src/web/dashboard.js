@@ -19,6 +19,12 @@ const state = {
   toastTimer: null,
   refreshTimer: null,
   challengeTicker: null,
+  liveConsoleHideTimer: null,
+  liveConsoleFadeTimer: null,
+  liveConsoleCompletedKey: null,
+  liveConsoleDismissedKey: null,
+  liveConsoleExpanded: false,
+  revealedTokens: new Map(),
 };
 
 const PALETTE = ["#a855f7", "#d946ef", "#8b5cf6", "#f472b6", "#67e8f9", "#6ee7b7", "#fbbf24"];
@@ -285,6 +291,57 @@ function renderAccounts() {
   }
 }
 
+function traceCycleKey(coordinator) {
+  const events = coordinator.events || [];
+  return String(events[0]?.at || events.at(-1)?.at || coordinator.nextScheduledRunAt || "idle");
+}
+
+function clearLiveConsoleTimers() {
+  clearTimeout(state.liveConsoleHideTimer);
+  clearTimeout(state.liveConsoleFadeTimer);
+  state.liveConsoleHideTimer = null;
+  state.liveConsoleFadeTimer = null;
+}
+
+function renderTraceRows(container, rows) {
+  container.replaceChildren();
+  for (const rowData of rows) {
+    const row = element("div", rowData.className || "terminal-line");
+    const time = element("time", null, formatDate(rowData.at, true));
+    const stage = element("b", null, rowData.stage.replaceAll("-", " "));
+    const message = element("span", null, rowData.accountLabel ? `${rowData.accountLabel} · ${rowData.message}` : rowData.message);
+    row.append(time, stage, message);
+    container.append(row);
+  }
+}
+
+function renderTraceArchive() {
+  const archive = byId("trace-archive-list");
+  const archiveState = byId("trace-archive-state");
+  const liveEvents = state.coordinator?.events || [];
+  if (liveEvents.length) {
+    archiveState.textContent = state.coordinator?.running ? "Live cycle record" : "Latest cycle record";
+    renderTraceRows(archive, [...liveEvents].reverse().map((event) => ({ ...event, className: "trace-archive-line" })));
+    return;
+  }
+  const persistedRuns = state.selectedId ? state.runs : state.overview?.recentRuns || [];
+  if (!persistedRuns.length) {
+    archiveState.textContent = "No stored checks";
+    archive.replaceChildren(element("p", "trace-archive-empty", "Run a collection cycle to create the first durable record."));
+    return;
+  }
+  archiveState.textContent = "Stored check record";
+  renderTraceRows(archive, persistedRuns.slice(0, 40).map((run) => ({
+    at: run.startedAt,
+    stage: run.status === "ok" ? "complete" : "error",
+    accountLabel: state.accounts.find((account) => account.id === run.accountId)?.label || run.accountId,
+    message: run.status === "ok"
+      ? `Verified snapshot · ${formatDuration(run.totalMs)} · logout ${run.loggedOut ? "confirmed" : "not confirmed"}`
+      : conciseError(run.errorMessage || "Check did not complete."),
+    className: "trace-archive-line",
+  })));
+}
+
 function renderCoordinator() {
   const coordinator = state.coordinator || {};
   const automation = state.settings?.automation;
@@ -311,12 +368,34 @@ function renderCoordinator() {
   byId("hero-run").disabled = Boolean(coordinator.running);
   byId("run-account").disabled = Boolean(coordinator.running);
   byId("stop-all").classList.toggle("hidden", !coordinator.canStop);
-  byId("dismiss-run").classList.toggle("hidden", Boolean(coordinator.running));
-
   const consolePanel = byId("run-console");
-  const showConsole = Boolean(coordinator.running || coordinator.events?.length);
+  const events = coordinator.events || [];
+  const cycleKey = traceCycleKey(coordinator);
+  const lastEventAt = Date.parse(events.at(-1)?.at || "");
+  const freshCompletion = Number.isFinite(lastEventAt) && Date.now() - lastEventAt < 10_000;
+  const completionVisible = events.length && state.liveConsoleCompletedKey === cycleKey && !consolePanel.classList.contains("hidden");
+  const showConsole = Boolean(coordinator.running || completionVisible || (freshCompletion && state.liveConsoleCompletedKey !== cycleKey && state.liveConsoleDismissedKey !== cycleKey));
+  if (coordinator.running) {
+    clearLiveConsoleTimers();
+    state.liveConsoleCompletedKey = null;
+    state.liveConsoleDismissedKey = null;
+  } else if (freshCompletion && state.liveConsoleCompletedKey !== cycleKey) {
+    state.liveConsoleCompletedKey = cycleKey;
+    clearLiveConsoleTimers();
+    state.liveConsoleHideTimer = setTimeout(() => {
+      consolePanel.classList.add("fading");
+      state.liveConsoleFadeTimer = setTimeout(() => {
+        consolePanel.classList.add("hidden");
+        consolePanel.classList.remove("fading");
+        document.body.classList.remove("trace-active");
+      }, 600);
+    }, 5_000);
+  }
   consolePanel.classList.toggle("hidden", !showConsole);
   consolePanel.classList.toggle("complete", showConsole && !coordinator.running);
+  consolePanel.classList.remove("fading");
+  document.body.classList.toggle("trace-active", showConsole);
+  byId("dismiss-run").classList.toggle("hidden", Boolean(coordinator.running));
   if (showConsole) {
     byId("run-stage").textContent = String(coordinator.currentStage || "idle").replaceAll("-", " ");
     byId("run-percent").textContent = `${finite(coordinator.progressPercent)}%`;
@@ -325,14 +404,12 @@ function renderCoordinator() {
       ? `${coordinator.currentAccountLabel} · ${coordinator.completedAccounts}/${coordinator.totalAccounts} completed`
       : `${coordinator.completedAccounts || 0}/${coordinator.totalAccounts || 0} completed`;
     byId("run-progress").style.width = `${Math.min(100, Math.max(0, finite(coordinator.progressPercent)))}%`;
-    const timeline = byId("event-timeline");
-    timeline.replaceChildren();
-    for (const event of [...(coordinator.events || [])].reverse()) {
-      const row = element("div", "event-row");
-      row.append(element("span", null, formatDate(event.at, true)), element("b", null, event.stage.replaceAll("-", " ")), element("span", null, event.accountLabel ? `${event.accountLabel} · ${event.message}` : event.message));
-      timeline.append(row);
-    }
+    renderTraceRows(byId("terminal-events"), events.slice(-40));
   }
+  byId("toggle-console-size").textContent = state.liveConsoleExpanded ? "Compact" : "Expand";
+  byId("toggle-console-size").setAttribute("aria-expanded", String(state.liveConsoleExpanded));
+  consolePanel.classList.toggle("expanded", state.liveConsoleExpanded);
+  renderTraceArchive();
 }
 
 function renderChallenges() {
@@ -489,6 +566,40 @@ function renderOverview() {
   renderOverviewMetrics();
   renderOverviewCharts();
   renderHealth();
+  renderOverviewTokenVault();
+}
+
+function tokenStatus(account) {
+  return account.hasApiToken ? "API token captured" : "API token pending";
+}
+
+function renderOverviewTokenVault() {
+  const list = byId("overview-token-list");
+  list.replaceChildren();
+  if (!state.accounts.length) {
+    list.append(element("p", "trace-archive-empty", "Add an account, then complete one browser cycle to capture its API access."));
+    return;
+  }
+  for (const account of state.accounts) {
+    const row = element("article", "vault-row");
+    const identity = element("div");
+    identity.append(element("h3", null, account.label), element("p", null, `GitHub · ${account.githubUsername}`));
+    const status = element("span", `token-status${account.hasApiToken ? " ready" : ""}`, tokenStatus(account));
+    const actions = element("div", "vault-actions");
+    const revealed = state.revealedTokens.get(account.id);
+    if (account.hasApiToken) {
+      const reveal = element("button", "trace-button", revealed ? "Hide" : "Reveal");
+      reveal.type = "button";
+      reveal.addEventListener("click", () => revealed ? hideApiToken(account.id) : revealApiToken(account.id));
+      const copy = element("button", "trace-button", "Copy");
+      copy.type = "button";
+      copy.addEventListener("click", () => copyApiToken(account.id));
+      actions.append(reveal, copy);
+    }
+    row.append(identity, status, actions);
+    if (revealed) row.append(element("code", "vault-token", revealed));
+    list.append(row);
+  }
 }
 
 function renderAccountMetrics() {
@@ -677,14 +788,20 @@ function renderAccount() {
   byId("selected-username").textContent = `GITHUB · ${account.githubUsername}`;
   byId("selected-label").textContent = account.label;
   byId("selected-last-run").textContent = historical?.lastRunAt ? `Last check ${formatDate(historical.lastRunAt, true)} · ${historical.lastStatus}` : "No checks stored yet";
-  byId("api-token-status").textContent = account.hasApiToken ? "API token captured" : "API token pending";
+  byId("api-token-status").textContent = tokenStatus(account);
   byId("api-token-status").classList.toggle("ready", account.hasApiToken);
   byId("copy-api-token").disabled = !account.hasApiToken;
+  byId("reveal-api-token").disabled = !account.hasApiToken;
+  const token = state.revealedTokens.get(account.id);
+  byId("reveal-api-token").textContent = token ? "API token revealed" : "Reveal API token";
+  byId("selected-token-reveal").classList.toggle("hidden", !token);
+  byId("selected-api-token").textContent = token || "";
   state.chartRenderDelay = 0;
-  renderAccountMetrics(); renderAccountCharts(); renderUsage(); renderGrants(); renderCredits(); renderActivity(); renderRuns();
+  renderAccountMetrics(); renderAccountCharts(); renderUsage(); renderGrants(); renderCredits(); renderActivity(); renderRuns(); renderTraceArchive();
 }
 
 function showOverview() {
+  if (state.selectedId !== null) state.revealedTokens.clear();
   state.selectedId = null;
   destroyCharts(ACCOUNT_CHARTS);
   byId("overview-view").classList.remove("hidden");
@@ -694,6 +811,7 @@ function showOverview() {
 }
 
 async function selectAccount(id) {
+  if (state.selectedId !== id) state.revealedTokens.clear();
   state.selectedId = id;
   destroyCharts(OVERVIEW_CHARTS);
   byId("overview-view").classList.add("hidden");
@@ -779,14 +897,37 @@ async function exportSelectedAccount() {
 
 async function copySelectedApiToken() {
   const account = selectedAccount();
+  if (account) await copyApiToken(account.id);
+}
+
+async function copyApiToken(id) {
+  const account = state.accounts.find((candidate) => candidate.id === id);
   if (!account?.hasApiToken) return;
   try {
-    const { token } = await api(`/api/account-token/${encodeURIComponent(account.id)}`);
+    const { token } = await api(`/api/account-token/${encodeURIComponent(id)}`);
     await navigator.clipboard.writeText(token);
     showToast("AgentRouter API token copied to the clipboard.");
   } catch (error) {
     showToast(error.message, true);
   }
+}
+
+async function revealApiToken(id) {
+  const account = state.accounts.find((candidate) => candidate.id === id);
+  if (!account?.hasApiToken) return;
+  try {
+    const { token } = await api(`/api/account-token/${encodeURIComponent(id)}`);
+    state.revealedTokens.set(id, token);
+    if (state.selectedId === id) renderAccount(); else renderOverviewTokenVault();
+    showToast("API token revealed for this browser session.");
+  } catch (error) {
+    showToast(error.message, true);
+  }
+}
+
+function hideApiToken(id) {
+  state.revealedTokens.delete(id);
+  if (state.selectedId === id) renderAccount(); else renderOverviewTokenVault();
 }
 
 function bindEvents() {
@@ -795,14 +936,22 @@ function bindEvents() {
   for (const id of ["open-settings", "hero-settings"]) byId(id).addEventListener("click", openSettingsDialog);
   for (const id of ["run-all", "hero-run"]) byId(id).addEventListener("click", () => runChecks());
   for (const id of ["stop-all", "challenge-stop"]) byId(id).addEventListener("click", stopChecks);
-  byId("run-account").addEventListener("click", () => runChecks(state.selectedId)); byId("copy-api-token").addEventListener("click", copySelectedApiToken);
+  byId("run-account").addEventListener("click", () => runChecks(state.selectedId)); byId("copy-api-token").addEventListener("click", copySelectedApiToken); byId("reveal-api-token").addEventListener("click", () => revealApiToken(state.selectedId)); byId("hide-api-token").addEventListener("click", () => hideApiToken(state.selectedId));
   byId("edit-account").addEventListener("click", () => openAccountDialog(selectedAccount())); byId("remove-account").addEventListener("click", removeSelectedAccount); byId("export-account").addEventListener("click", exportSelectedAccount);
   byId("close-dialog").addEventListener("click", () => byId("account-dialog").close()); byId("cancel-dialog").addEventListener("click", () => byId("account-dialog").close()); byId("account-form").addEventListener("submit", saveAccount);
   byId("close-settings").addEventListener("click", () => byId("settings-dialog").close()); byId("cancel-settings").addEventListener("click", () => byId("settings-dialog").close()); byId("settings-form").addEventListener("submit", saveSettings);
-  byId("toggle-events").addEventListener("click", () => byId("event-timeline").classList.toggle("hidden")); byId("close-inspector").addEventListener("click", () => byId("data-inspector").classList.add("hidden"));
-  byId("dismiss-run").addEventListener("click", () => byId("run-console").classList.add("hidden"));
+  byId("toggle-console-size").addEventListener("click", () => { state.liveConsoleExpanded = !state.liveConsoleExpanded; renderCoordinator(); }); byId("close-inspector").addEventListener("click", () => byId("data-inspector").classList.add("hidden"));
+  byId("dismiss-run").addEventListener("click", () => { const coordinator = state.coordinator || {}; state.liveConsoleDismissedKey = traceCycleKey(coordinator); clearLiveConsoleTimers(); byId("run-console").classList.add("hidden"); document.body.classList.remove("trace-active"); });
   byId("usage-granularity").addEventListener("change", () => state.selectedId && selectAccount(state.selectedId));
-  for (const tab of document.querySelectorAll(".data-tab")) tab.addEventListener("click", () => { document.querySelectorAll(".data-tab").forEach((item) => item.classList.toggle("active", item === tab)); byId("activity-tab").classList.toggle("hidden", tab.dataset.tab !== "activity"); byId("runs-tab").classList.toggle("hidden", tab.dataset.tab !== "runs"); });
+  for (const tab of document.querySelectorAll(".data-tab")) tab.addEventListener("click", () => {
+    document.querySelectorAll(".data-tab").forEach((item) => {
+      const active = item === tab;
+      item.classList.toggle("active", active);
+      item.setAttribute("aria-selected", String(active));
+    });
+    byId("activity-tab").classList.toggle("hidden", tab.dataset.tab !== "activity");
+    byId("runs-tab").classList.toggle("hidden", tab.dataset.tab !== "runs");
+  });
 }
 
 async function refresh() {

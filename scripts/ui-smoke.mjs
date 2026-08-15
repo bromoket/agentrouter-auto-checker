@@ -16,11 +16,13 @@ async function validateBrowser(name, browserType) {
   }
 
   try {
+    const requestedViewport = process.env.UI_SMOKE_VIEWPORT?.trim().toLowerCase();
     for (const viewport of [
       { width: 1440, height: 900, label: "desktop" },
       { width: 768, height: 900, label: "tablet" },
       { width: 390, height: 844, label: "mobile" },
     ]) {
+      if (requestedViewport && requestedViewport !== viewport.label) continue;
       const context = await browser.newContext({
         viewport: { width: viewport.width, height: viewport.height },
         reducedMotion: "reduce",
@@ -49,6 +51,9 @@ async function validateBrowser(name, browserType) {
       }
       await page.locator("#overview-view").waitFor({ state: "visible" });
       assert(await page.locator("#overview-money-chart").isVisible(), `${name}/${viewport.label}: overview chart hidden`);
+      assert(await page.locator("#trace-archive").isVisible(), `${name}/${viewport.label}: persistent trace archive hidden`);
+      assert(await page.locator("#overview-token-list").isVisible(), `${name}/${viewport.label}: API vault hidden`);
+      assert(await page.locator("#toggle-console-size").count() === 1, `${name}/${viewport.label}: live trace expand control missing`);
       const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
       assert(overflow <= 2, `${name}/${viewport.label}: horizontal overflow is ${overflow}px`);
 
@@ -59,6 +64,8 @@ async function validateBrowser(name, browserType) {
         await page.locator("#money-chart").waitFor({ state: "visible" });
         const rawText = (await page.locator("#account-view").innerText()).toLowerCase();
         assert(!rawText.includes("null") && !rawText.includes("undefined"), `${name}/${viewport.label}: raw null value rendered`);
+        assert(!rawText.includes("visible fallback"), `${name}/${viewport.label}: obsolete visible fallback control rendered`);
+        assert(await page.locator("#reveal-api-token").count() === 1, `${name}/${viewport.label}: API reveal control missing`);
         const chartCount = await page.locator("#account-view canvas").count();
         assert(chartCount >= 5, `${name}/${viewport.label}: expected interactive account charts`);
 
@@ -110,6 +117,8 @@ async function validateBrowser(name, browserType) {
   }
 }
 
+const requestedBrowser = process.env.UI_SMOKE_BROWSER?.trim().toLowerCase();
 for (const [name, browserType] of [["chromium", chromium], ["firefox", firefox], ["webkit", webkit]]) {
+  if (requestedBrowser && requestedBrowser !== name) continue;
   await validateBrowser(name, browserType);
 }

@@ -1,56 +1,39 @@
-# AgentRouter Monitor
+# AgentRouter Observatory
 
-A Bun + TypeScript service that continuously checks any number of AgentRouter accounts, records verified account data in SQLite, and presents combined and per-account analytics in a private web dashboard.
+Private, local-first monitoring for one or many AgentRouter accounts. Bun and Playwright collect verified console data, SQLite keeps the timeline, and a responsive dashboard turns balance, usage, grants, and reliability into useful signal.
 
-Each cycle uses a dedicated persistent Chromium profile, signs in through GitHub, reads the visible `/console/` and `/console/topup` pages, retries suspicious double-zero money values, saves the result, and confirms logout through the visible **Quit** action. Saved browser profiles retain GitHub device trust while AgentRouter is logged out between checks.
+<p align="center">
+  <img alt="Redacted unified dashboard preview" src="docs/images/overview-redacted.png" width="900">
+</p>
 
-Balances are stored as signed USD values: a legitimate negative balance is retained and alerted as low credit instead of being discarded as malformed data. Consumption remains non-negative.
+<p align="center">
+  <img alt="Redacted account analytics preview" src="docs/images/account-redacted.png" width="900">
+</p>
 
-Telegram notifications are intentionally quiet: every positive balance delta, confirmed credit grants, low-balance crossings, large balance decreases, repeated failures, and recovery. A grant log and its matching balance delta are merged into one event; unexplained increases remain clearly labeled as observations rather than grants. Financial alerts include timing, session/logout evidence, totals, and an account-history graph. Delivery is locked to one verified private Telegram chat and username.
+## What it does
 
-## Install and run
+- Runs a separate persistent browser session for every GitHub account, records `/console` and `/console/topup`, and verifies AgentRouter logout.
+- Retains signed balances, including valid negative balances; retries suspicious transient `$0.00` responses.
+- Captures a private API token during the browser cycle, then uses the preserved AgentRouter session for lightweight one-minute balance and usage observations.
+- Shows merged and per-account interactive charts, exports, a compact live trace terminal, and a scrollable run archive.
+- Keeps captured API tokens in a private, on-demand vault: copy or reveal only the selected account's token when needed.
+- Sends quiet Telegram alerts for material balance changes, grants, low credit, repeated failures, and recovery.
 
-Requirements: Bun 1.3+, Node.js 20+, and Playwright Chromium.
+## Quick start
+
+Requires Bun 1.3+ and Playwright Chromium.
 
 ```bash
 bun install --frozen-lockfile
-bunx playwright install --with-deps chromium
+bun run install:browsers                 # Windows/macOS
+# Linux: bunx playwright install --with-deps chromium
 cp accounts.example.json data/accounts.json
 cp settings.example.json data/settings.json
 bun run start
 ```
 
-On Windows, use `bun run install:browsers` instead of the Playwright `--with-deps` command. The dashboard defaults to <http://127.0.0.1:3100>; accounts and schedules can be managed entirely from its UI. Credentials, cookies, profiles, SQLite, and Telegram state under `data/` are ignored by Git and must be protected as secrets.
+Open `http://127.0.0.1:3100`, add accounts in the dashboard, and control both the browser-cycle schedule and minute-poll schedule there. Useful checks: `bun run once`, `bun run typecheck`, `bun test`, `bun run test:ui`, and `bun run test:performance`.
 
-Useful commands:
+## Security and deployment
 
-```bash
-bun run once              # one complete account cycle
-bun run dashboard         # UI without the scheduler
-bun run probe:headless ID # non-persisting headless compatibility probe
-bun run telegram:test     # one controlled Telegram setup message
-bun run typecheck
-bun test
-bun run audit:db
-```
-
-## Telegram
-
-Set these together in the service environment:
-
-```dotenv
-TELEGRAM_BOT_TOKEN=
-TELEGRAM_CHAT_ID=
-TELEGRAM_ALLOWED_USERNAME=
-TELEGRAM_LOW_BALANCE_USD=50
-TELEGRAM_LARGE_DROP_USD=25
-TELEGRAM_REPEATED_FAILURE_COUNT=3
-TELEGRAM_GRAPHS_ENABLED=true
-TELEGRAM_DASHBOARD_URL=http://100.127.29.78:8456
-```
-
-The bot verifies that the numeric destination is a private chat whose username exactly matches `TELEGRAM_ALLOWED_USERNAME` before enabling notifications. Branding assets for BotFather are in [`assets/telegram`](assets/telegram).
-
-## Ubuntu service
-
-The production layout uses a dedicated hardened systemd user and binds to one exact Tailscale address. Installation, upgrades, logs, health checks, backups, and the headed recovery route are documented in [`docs/ubuntu-deployment.md`](docs/ubuntu-deployment.md).
+`data/` holds credentials, private browser state, API tokens, screenshots, SQLite, and Telegram state; it is deliberately ignored by Git. Keep the dashboard on loopback or a private network such as Tailscale—there is no multi-user login layer. The supplied hardened systemd deployment is documented in [Ubuntu deployment](docs/ubuntu-deployment.md); copy `.env.example` or `deploy/agentrouter-monitor.env.example` and keep the real environment file outside the repository.
