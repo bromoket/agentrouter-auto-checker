@@ -72,7 +72,8 @@ button { color: inherit; }
 .status-chip.ok { color: #a7f3d0; border-color: rgba(110,231,183,.25); }
 .status-chip.ok i { background: var(--green); }
 
-.run-console { position: sticky; top: 93px; z-index: 22; width: min(980px, calc(100% - 44px)); margin: 12px auto 0; border-radius: 18px; padding: 12px 14px; display: grid; grid-template-columns: 42px minmax(230px, 1fr) minmax(170px, 1.35fr) auto; gap: 12px; align-items: center; animation: rise .35s ease both; }
+.run-console { position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%); z-index: 90; width: min(1120px, calc(100% - 44px)); margin: 0; border-radius: 16px; padding: 12px 14px; display: grid; grid-template-columns: 42px minmax(230px, 1fr) minmax(170px, 1.35fr) auto; gap: 12px; align-items: center; animation: dock-rise .35s ease both; box-shadow: 0 24px 90px rgba(0,0,0,.72), inset 0 1px 0 rgba(255,255,255,.05); }
+.run-console.complete { border-color: rgba(110,231,183,.25); }
 .run-orbit { width: 38px; height: 38px; position: relative; display: grid; place-items: center; }
 .run-orbit::after { content: ""; width: 11px; height: 11px; background: #fff; border-radius: 50%; box-shadow: 0 0 22px var(--fuchsia); }
 .run-orbit span { position: absolute; inset: 2px; border: 1px solid rgba(216,180,254,.28); border-radius: 50%; animation: rotate 3s linear infinite; }
@@ -85,11 +86,14 @@ button { color: inherit; }
 .run-copy p { margin: 0; color: var(--muted); font-size: 12px; }
 .progress-shell { height: 6px; border-radius: 99px; padding: 1px; background: rgba(255,255,255,.05); overflow: hidden; }
 .progress-shell i { display: block; width: 0; height: 100%; border-radius: inherit; background: var(--gradient); box-shadow: 0 0 18px var(--fuchsia); transition: width .5s cubic-bezier(.2,.8,.2,1); }
-.event-timeline { grid-column: 2 / -1; max-height: 170px; overflow: auto; border-top: 1px solid var(--line); padding-top: 12px; }
+.event-timeline { grid-column: 1 / -1; max-height: min(260px, 40vh); overflow: auto; border-top: 1px solid var(--line); padding-top: 12px; scrollbar-gutter: stable; }
 .dismiss-run { position: absolute; top: 5px; right: 6px; width: 25px; height: 25px; border: 0; background: transparent; color: var(--dim); cursor: pointer; font-size: 17px; }
 .dismiss-run:hover { color: #e9d5ff; }
 .event-row { display: grid; grid-template-columns: 80px 130px 1fr; gap: 12px; padding: 7px 3px; font-size: 12px; color: var(--muted); border-bottom: 1px solid rgba(255,255,255,.035); }
 .event-row b { color: #d8b4fe; text-transform: capitalize; }
+.token-status { display: inline-flex; align-items: center; min-height: 42px; padding: 0 12px; border: 1px solid var(--line); border-radius: 12px; color: var(--muted); font-size: 12px; }
+.token-status.ready { color: var(--green); border-color: rgba(110,231,183,.28); background: rgba(110,231,183,.06); }
+@keyframes dock-rise { from { opacity: 0; transform: translate(-50%, 18px); } }
 
 .challenge-backdrop { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; padding: 20px; background: rgba(5,1,10,.76); backdrop-filter: blur(18px); }
 .challenge-card { width: min(520px, 100%); min-height: 540px; position: relative; overflow: hidden; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; border: 1px solid rgba(216,180,254,.32); border-radius: 36px; padding: 50px; background: radial-gradient(circle at 50% 35%, rgba(168,85,247,.24), transparent 40%), linear-gradient(150deg,#1b0c2d,#09040f); box-shadow: 0 40px 150px rgba(88,28,135,.65), inset 0 1px rgba(255,255,255,.08); animation: rise .45s ease both; }
@@ -267,7 +271,7 @@ form > label { margin-bottom: 15px; }
   .hero-visual { display: none; }
   .account-hero { align-items: flex-start; flex-direction: column; }
   .account-actions { justify-content: flex-start; }
-  .run-console { top: 88px; grid-template-columns: 45px 1fr auto; }
+  .run-console { grid-template-columns: 45px 1fr auto; }
   .run-console .progress-shell { grid-column: 2 / -1; }
   .event-timeline { grid-column: 1 / -1; }
 }
@@ -289,7 +293,7 @@ form > label { margin-bottom: 15px; }
   .panel { padding: 17px; border-radius: 19px; }
   .chart-wrap, .chart-wrap.chart-tall { height: 250px; }
   .field-grid, .switch-grid { grid-template-columns: 1fr; }
-  .run-console { width: calc(100% - 20px); top: 80px; grid-template-columns: 38px 1fr; }
+  .run-console { width: calc(100% - 20px); bottom: 10px; grid-template-columns: 38px 1fr; }
   .run-console > .button { grid-column: 1 / -1; }
   .challenge-card { min-height: 500px; padding: 32px 20px; }
 }

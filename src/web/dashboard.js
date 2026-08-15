@@ -12,7 +12,10 @@ const state = {
   activity: [],
   credits: [],
   grants: [],
+  endpointObservations: [],
   charts: new Map(),
+  chartTimers: new Map(),
+  chartRenderDelay: 0,
   toastTimer: null,
   refreshTimer: null,
   challengeTicker: null,
@@ -113,7 +116,48 @@ function selectedAccount() {
 }
 
 function latestMetrics() {
-  return [...state.history].reverse().find((item) => item.status === "ok")?.metrics || {};
+  const browser = [...state.history].reverse().find((item) => item.status === "ok");
+  const endpoint = state.endpointObservations.find((item) => item.status === "ok");
+  if (!endpoint || (browser && Date.parse(browser.startedAt) >= Date.parse(endpoint.observedAt))) {
+    return browser?.metrics || {};
+  }
+  return {
+    ...(browser?.metrics || {}),
+    balance: endpoint.balance,
+    consumed: endpoint.consumed,
+    requestCount: endpoint.requestCount,
+  };
+}
+
+function sampleSeries(points, maximum = 360) {
+  if (points.length <= maximum) return points;
+  const sampled = [];
+  const stride = (points.length - 1) / (maximum - 1);
+  for (let index = 0; index < maximum; index += 1) {
+    sampled.push(points[Math.round(index * stride)]);
+  }
+  return sampled;
+}
+
+function financialPoints(history, endpointObservations) {
+  const points = [
+    ...history.filter((item) => item.status === "ok").map((item) => ({
+      at: item.startedAt,
+      balance: item.metrics.balance,
+      consumed: item.metrics.consumed,
+      requestCount: item.metrics.requestCount,
+      source: "Browser cycle",
+      loggedOut: item.loggedOut,
+    })),
+    ...endpointObservations.filter((item) => item.status === "ok").map((item) => ({
+      at: item.observedAt,
+      balance: item.balance,
+      consumed: item.consumed,
+      requestCount: item.requestCount,
+      source: "Minute poll",
+    })),
+  ].sort((left, right) => Date.parse(left.at) - Date.parse(right.at));
+  return sampleSeries(points);
 }
 
 function metricCard(label, value, note, color = PALETTE[0], extraClass = "") {
@@ -131,6 +175,8 @@ function chartGradient(context, color, alpha = .32) {
 }
 
 function destroyChart(id) {
+  clearTimeout(state.chartTimers.get(id));
+  state.chartTimers.delete(id);
   const chart = state.charts.get(id);
   if (chart) chart.destroy();
   state.charts.delete(id);
@@ -154,6 +200,17 @@ function openInspector(title, rows) {
 
 function createChart(id, config, inspectPoint) {
   destroyChart(id);
+  const delay = state.chartRenderDelay;
+  state.chartRenderDelay += 45;
+  const timer = setTimeout(() => {
+    state.chartTimers.delete(id);
+    buildChart(id, config, inspectPoint);
+  }, delay);
+  state.chartTimers.set(id, timer);
+}
+
+function buildChart(id, config, inspectPoint) {
+  destroyChart(id);
   const canvas = byId(id);
   if (!canvas || typeof Chart === "undefined") return;
   const context = canvas.getContext("2d");
@@ -174,7 +231,7 @@ function createChart(id, config, inspectPoint) {
     options: {
       responsive: true,
       maintainAspectRatio: false,
-      animation: { duration: 450, easing: "easeOutQuart" },
+      animation: false,
       interaction: { mode: "index", intersect: false },
       onHover(event, active) { event.native.target.style.cursor = active.length ? "pointer" : "default"; },
       onClick(_event, active, instance) {
@@ -259,6 +316,7 @@ function renderCoordinator() {
   const consolePanel = byId("run-console");
   const showConsole = Boolean(coordinator.running || coordinator.events?.length);
   consolePanel.classList.toggle("hidden", !showConsole);
+  consolePanel.classList.toggle("complete", showConsole && !coordinator.running);
   if (showConsole) {
     byId("run-stage").textContent = String(coordinator.currentStage || "idle").replaceAll("-", " ");
     byId("run-percent").textContent = `${finite(coordinator.progressPercent)}%`;
@@ -326,10 +384,10 @@ function aggregatePortfolioHistory(accountData) {
   const points = [];
   const accountsWithHistory = new Set();
   for (const item of accountData) {
-    const successful = item.history.filter((entry) => entry.status === "ok");
+    const successful = financialPoints(item.history, item.endpointObservations || []);
     if (successful.length) accountsWithHistory.add(item.account.id);
     for (const sample of successful) {
-      points.push({ at: sample.startedAt, accountId: item.account.id, metrics: sample.metrics });
+      points.push({ at: sample.at, accountId: item.account.id, metrics: sample });
     }
   }
   points.sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
@@ -427,6 +485,7 @@ function renderHealth() {
 }
 
 function renderOverview() {
+  state.chartRenderDelay = 0;
   renderOverviewMetrics();
   renderOverviewCharts();
   renderHealth();
@@ -448,16 +507,20 @@ function renderAccountMetrics() {
 
 function renderAccountCharts() {
   const successful = state.history.filter((item) => item.status === "ok");
+  const financial = financialPoints(state.history, state.endpointObservations);
   const labels = timeLabels(successful);
   const inspectHistory = (index) => {
     const point = successful[index];
     if (!point) return;
     openInspector("Account snapshot", [["Observed", formatDate(point.startedAt, true)], ["Balance", formatMoney(point.metrics.balance, 4)], ["Lifetime spend", formatMoney(point.metrics.consumed, 4)], ["Requests", formatNumber(point.metrics.requestCount)], ["7-day tokens", formatCompact(point.metrics.statisticalTokens)], ["Logout", point.loggedOut ? "Confirmed" : "Not confirmed"]]);
   };
-  createChart("money-chart", { type: "line", data: { labels, datasets: [
-    { label: "Balance", data: successful.map((item) => item.metrics.balance), borderColor: PALETTE[0], fill: true },
-    { label: "Lifetime spend", data: successful.map((item) => item.metrics.consumed), borderColor: PALETTE[1] },
-  ] }, options: { scales: { y: { ticks: { callback: moneyTick } } }, plugins: { tooltip: { callbacks: { label: (item) => `${item.dataset.label}: ${formatMoney(item.raw, 4)}` } } } } }, inspectHistory);
+  createChart("money-chart", { type: "line", data: { labels: financial.map((item) => formatDate(item.at)), datasets: [
+    { label: "Balance", data: financial.map((item) => item.balance), borderColor: PALETTE[0], fill: true },
+    { label: "Lifetime spend", data: financial.map((item) => item.consumed), borderColor: PALETTE[1] },
+  ] }, options: { scales: { y: { ticks: { callback: moneyTick } } }, plugins: { tooltip: { callbacks: { afterBody: (items) => financial[items[0]?.dataIndex]?.source || "", label: (item) => `${item.dataset.label}: ${formatMoney(item.raw, 4)}` } } } } }, (index) => {
+    const point = financial[index];
+    if (point) openInspector("Financial observation", [["Observed", formatDate(point.at, true)], ["Source", point.source], ["Balance", formatMoney(point.balance, 4)], ["Lifetime spend", formatMoney(point.consumed, 4)], ["Requests", formatNumber(point.requestCount)], ["Logout", point.loggedOut === undefined ? "Not applicable" : point.loggedOut ? "Confirmed" : "Not confirmed"]]);
+  });
 
   createChart("duration-chart", { type: "line", data: { labels: timeLabels(state.history), datasets: [
     { label: "Login", data: state.history.map((item) => finite(item.loginMs) / 1_000), borderColor: PALETTE[4] },
@@ -614,6 +677,10 @@ function renderAccount() {
   byId("selected-username").textContent = `GITHUB · ${account.githubUsername}`;
   byId("selected-label").textContent = account.label;
   byId("selected-last-run").textContent = historical?.lastRunAt ? `Last check ${formatDate(historical.lastRunAt, true)} · ${historical.lastStatus}` : "No checks stored yet";
+  byId("api-token-status").textContent = account.hasApiToken ? "API token captured" : "API token pending";
+  byId("api-token-status").classList.toggle("ready", account.hasApiToken);
+  byId("copy-api-token").disabled = !account.hasApiToken;
+  state.chartRenderDelay = 0;
   renderAccountMetrics(); renderAccountCharts(); renderUsage(); renderGrants(); renderCredits(); renderActivity(); renderRuns();
 }
 
@@ -634,12 +701,12 @@ async function selectAccount(id) {
   renderAccounts();
   try {
     const granularity = byId("usage-granularity").value;
-    const [history, runs, usage, activity, credits] = await Promise.all([
-      api(`/api/history/${encodeURIComponent(id)}?limit=1000`), api(`/api/runs?accountId=${encodeURIComponent(id)}&limit=200`), api(`/api/usage/${encodeURIComponent(id)}?granularity=${encodeURIComponent(granularity)}`), api(`/api/activity/${encodeURIComponent(id)}`), api(`/api/credits/${encodeURIComponent(id)}?limit=1000`),
+    const [history, runs, usage, activity, credits, endpointObservations] = await Promise.all([
+      api(`/api/history/${encodeURIComponent(id)}?limit=1000`), api(`/api/runs?accountId=${encodeURIComponent(id)}&limit=200`), api(`/api/usage/${encodeURIComponent(id)}?granularity=${encodeURIComponent(granularity)}`), api(`/api/activity/${encodeURIComponent(id)}`), api(`/api/credits/${encodeURIComponent(id)}?limit=1000`), api(`/api/endpoint-observations/${encodeURIComponent(id)}?limit=5000`),
     ]);
     if (state.selectedId !== id) return;
     const grants = state.overview?.accounts?.find((item) => item.account.id === id)?.grants || [];
-    Object.assign(state, { history, runs, usage, activity, credits, grants });
+    Object.assign(state, { history, runs, usage, activity, credits, grants, endpointObservations });
     renderAccount();
     window.scrollTo({ top: 0, behavior: "smooth" });
   } catch (error) { showToast(error.message, true); }
@@ -656,10 +723,10 @@ async function loadCore(refreshView = true) {
   else showOverview();
 }
 
-async function runChecks(accountId, interactive = false) {
+async function runChecks(accountId) {
   try {
-    await api("/api/checks/run", { method: "POST", body: accountId ? { accountId, interactive } : { interactive } });
-    showToast(interactive ? "Visible authentication started." : accountId ? "Account check started." : "Full collection cycle started.");
+    await api("/api/checks/run", { method: "POST", body: accountId ? { accountId } : {} });
+    showToast(accountId ? "Account check started." : "Full collection cycle started.");
     await new Promise((resolve) => setTimeout(resolve, 250));
     state.coordinator = await api("/api/coordinator"); renderCoordinator();
     clearTimeout(state.refreshTimer);
@@ -674,27 +741,27 @@ async function stopChecks() {
 
 function openAccountDialog(account = null) {
   byId("dialog-title").textContent = account ? "Edit account" : "Add account";
-  byId("account-id").value = account?.id || ""; byId("github-username").value = account?.githubUsername || ""; byId("account-label").value = account?.label || ""; byId("github-password").value = ""; byId("github-password").required = !account; byId("password-help").textContent = account ? "Leave blank to keep the saved password." : "Required for a new account."; byId("agentrouter-api-token").value = ""; byId("api-token-help").textContent = account?.hasApiToken ? "Leave blank to keep the saved API token." : "Optional. Enables browser-free minute polling."; byId("account-enabled").checked = account?.enabled ?? true; byId("account-run-order").value = String(account?.runOrder ?? state.accounts.length); byId("form-error").textContent = "";
+  byId("account-id").value = account?.id || ""; byId("github-username").value = account?.githubUsername || ""; byId("account-label").value = account?.label || ""; byId("github-password").value = ""; byId("github-password").required = !account; byId("password-help").textContent = account ? "Leave blank to keep the saved password." : "Required for a new account."; byId("account-enabled").checked = account?.enabled ?? true; byId("account-run-order").value = String(account?.runOrder ?? state.accounts.length); byId("form-error").textContent = "";
   byId("account-dialog").showModal(); byId("github-username").focus();
 }
 
 async function saveAccount(event) {
   event.preventDefault();
   try {
-    const result = await api("/api/accounts", { method: "POST", body: { id: byId("account-id").value || undefined, githubUsername: byId("github-username").value, label: byId("account-label").value, githubPassword: byId("github-password").value, agentRouterApiToken: byId("agentrouter-api-token").value, enabled: byId("account-enabled").checked, runOrder: Number(byId("account-run-order").value) } });
+    const result = await api("/api/accounts", { method: "POST", body: { id: byId("account-id").value || undefined, githubUsername: byId("github-username").value, label: byId("account-label").value, githubPassword: byId("github-password").value, enabled: byId("account-enabled").checked, runOrder: Number(byId("account-run-order").value) } });
     byId("account-dialog").close(); state.selectedId = result.account.id; showToast("Account saved in the protected local credential file."); await loadCore(true);
   } catch (error) { byId("form-error").textContent = error.message; }
 }
 
 function openSettingsDialog() {
   const automation = state.settings?.automation; if (!automation) return;
-  byId("interval-minutes").value = automation.intervalMinutes; byId("endpoint-poll-interval").value = automation.endpointPollIntervalMinutes; byId("account-delay-seconds").value = automation.accountDelaySeconds; byId("two-factor-timeout").value = automation.twoFactorTimeoutMinutes; byId("activity-lookback").value = automation.activityLookbackDays; byId("scheduler-enabled").checked = automation.schedulerEnabled; byId("endpoint-polling-enabled").checked = automation.endpointPollingEnabled; byId("run-on-start").checked = automation.runOnStart; byId("open-on-start").checked = automation.openDashboardOnStart; byId("browser-headless").checked = automation.browserHeadless; byId("capture-screenshots").checked = automation.captureScreenshots; byId("settings-error").textContent = ""; byId("settings-dialog").showModal();
+  byId("interval-minutes").value = automation.intervalMinutes; byId("endpoint-poll-interval").value = automation.endpointPollIntervalMinutes; byId("account-delay-seconds").value = automation.accountDelaySeconds; byId("two-factor-timeout").value = automation.twoFactorTimeoutMinutes; byId("activity-lookback").value = automation.activityLookbackDays; byId("scheduler-enabled").checked = automation.schedulerEnabled; byId("endpoint-polling-enabled").checked = automation.endpointPollingEnabled; byId("run-on-start").checked = automation.runOnStart; byId("open-on-start").checked = automation.openDashboardOnStart; byId("capture-screenshots").checked = automation.captureScreenshots; byId("settings-error").textContent = ""; byId("settings-dialog").showModal();
 }
 
 async function saveSettings(event) {
   event.preventDefault();
   try {
-    const result = await api("/api/settings", { method: "PUT", body: { intervalMinutes: Number(byId("interval-minutes").value), endpointPollIntervalMinutes: Number(byId("endpoint-poll-interval").value), accountDelaySeconds: Number(byId("account-delay-seconds").value), twoFactorTimeoutMinutes: Number(byId("two-factor-timeout").value), activityLookbackDays: Number(byId("activity-lookback").value), schedulerEnabled: byId("scheduler-enabled").checked, endpointPollingEnabled: byId("endpoint-polling-enabled").checked, runOnStart: byId("run-on-start").checked, openDashboardOnStart: byId("open-on-start").checked, browserHeadless: byId("browser-headless").checked, captureScreenshots: byId("capture-screenshots").checked } });
+    const result = await api("/api/settings", { method: "PUT", body: { intervalMinutes: Number(byId("interval-minutes").value), endpointPollIntervalMinutes: Number(byId("endpoint-poll-interval").value), accountDelaySeconds: Number(byId("account-delay-seconds").value), twoFactorTimeoutMinutes: Number(byId("two-factor-timeout").value), activityLookbackDays: Number(byId("activity-lookback").value), schedulerEnabled: byId("scheduler-enabled").checked, endpointPollingEnabled: byId("endpoint-polling-enabled").checked, runOnStart: byId("run-on-start").checked, openDashboardOnStart: byId("open-on-start").checked, browserHeadless: state.settings.automation.browserHeadless, captureScreenshots: byId("capture-screenshots").checked } });
     state.settings.automation = result.automation; byId("settings-dialog").close(); showToast("Automation settings saved."); await loadCore(false);
   } catch (error) { byId("settings-error").textContent = error.message; }
 }
@@ -710,13 +777,25 @@ async function exportSelectedAccount() {
   try { const payload = await api(`/api/export/${encodeURIComponent(account.id)}`); const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" }); const url = URL.createObjectURL(blob); const link = element("a"); link.href = url; link.download = `${account.id}-agentrouter-analysis.json`; document.body.append(link); link.click(); link.remove(); URL.revokeObjectURL(url); } catch (error) { showToast(error.message, true); }
 }
 
+async function copySelectedApiToken() {
+  const account = selectedAccount();
+  if (!account?.hasApiToken) return;
+  try {
+    const { token } = await api(`/api/account-token/${encodeURIComponent(account.id)}`);
+    await navigator.clipboard.writeText(token);
+    showToast("AgentRouter API token copied to the clipboard.");
+  } catch (error) {
+    showToast(error.message, true);
+  }
+}
+
 function bindEvents() {
   byId("brand-home").addEventListener("click", showOverview); byId("overview-nav").addEventListener("click", showOverview); byId("back-overview").addEventListener("click", showOverview);
   for (const id of ["add-account", "rail-add", "onboarding-add"]) byId(id).addEventListener("click", () => openAccountDialog());
   for (const id of ["open-settings", "hero-settings"]) byId(id).addEventListener("click", openSettingsDialog);
   for (const id of ["run-all", "hero-run"]) byId(id).addEventListener("click", () => runChecks());
   for (const id of ["stop-all", "challenge-stop"]) byId(id).addEventListener("click", stopChecks);
-  byId("run-account").addEventListener("click", () => runChecks(state.selectedId)); byId("authenticate-account").addEventListener("click", () => runChecks(state.selectedId, true));
+  byId("run-account").addEventListener("click", () => runChecks(state.selectedId)); byId("copy-api-token").addEventListener("click", copySelectedApiToken);
   byId("edit-account").addEventListener("click", () => openAccountDialog(selectedAccount())); byId("remove-account").addEventListener("click", removeSelectedAccount); byId("export-account").addEventListener("click", exportSelectedAccount);
   byId("close-dialog").addEventListener("click", () => byId("account-dialog").close()); byId("cancel-dialog").addEventListener("click", () => byId("account-dialog").close()); byId("account-form").addEventListener("submit", saveAccount);
   byId("close-settings").addEventListener("click", () => byId("settings-dialog").close()); byId("cancel-settings").addEventListener("click", () => byId("settings-dialog").close()); byId("settings-form").addEventListener("submit", saveSettings);

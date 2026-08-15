@@ -148,7 +148,8 @@
             </div>
             <div class="account-actions">
               <button id="run-account" class="button primary" type="button">▶ Run now</button>
-              <button id="authenticate-account" class="button ghost" type="button">Visible fallback</button>
+              <span id="api-token-status" class="token-status">API token pending</span>
+              <button id="copy-api-token" class="button ghost" type="button">Copy API token</button>
               <button id="export-account" class="button ghost" type="button">Export</button>
               <button id="edit-account" class="button icon-only" type="button" aria-label="Edit account">✎</button>
               <button id="remove-account" class="button icon-only danger-button" type="button" aria-label="Remove account">⌫</button>
@@ -241,7 +242,7 @@
           <label>Display label<input id="account-label" name="label" maxlength="80" placeholder="Defaults to username"></label>
         </div>
         <label>GitHub password<input id="github-password" name="githubPassword" type="password" autocomplete="current-password" maxlength="512"><small id="password-help">Required for a new account.</small></label>
-        <label>AgentRouter API token<input id="agentrouter-api-token" name="agentRouterApiToken" type="password" autocomplete="off" maxlength="259" placeholder="sk-..."><small id="api-token-help">Optional. Enables browser-free minute polling.</small></label>
+        <div class="info-callout"><strong>Automatic API access</strong><p>The next successful browser cycle captures an active AgentRouter API token and starts read-only minute polling. Tokens stay in the protected credential file.</p></div>
         <div class="field-grid">
           <label>Run order<input id="account-run-order" name="runOrder" type="number" min="0" max="10000" step="1" value="0"></label>
           <label class="switch-row"><input id="account-enabled" name="enabled" type="checkbox" checked><span class="switch"></span><span>Scheduled checks enabled</span></label>
@@ -266,10 +267,9 @@
           <label class="switch-row"><input id="endpoint-polling-enabled" type="checkbox"><span class="switch"></span><span>Read-only endpoint polling</span></label>
           <label class="switch-row"><input id="run-on-start" type="checkbox"><span class="switch"></span><span>Run on startup</span></label>
           <label class="switch-row"><input id="open-on-start" type="checkbox"><span class="switch"></span><span>Open dashboard on startup</span></label>
-          <label class="switch-row"><input id="browser-headless" type="checkbox"><span class="switch"></span><span>Headless Chromium</span></label>
           <label class="switch-row"><input id="capture-screenshots" type="checkbox"><span class="switch"></span><span>Capture screenshots</span></label>
         </div>
-        <div class="info-callout"><strong>Two independent schedules</strong><p>Browser cycles handle GitHub OAuth and verified logout. Read-only endpoint polling uses each account's AgentRouter API token and does not launch Chromium.</p></div>
+        <div class="info-callout"><strong>Two independent schedules</strong><p>Server browser cycles handle GitHub OAuth, automatic token capture, and verified logout. Read-only polling then refreshes balance and usage without launching Chromium.</p></div>
         <p id="settings-error" class="form-error" role="alert"></p>
         <div class="dialog-actions"><button id="cancel-settings" class="button ghost" type="button">Cancel</button><button class="button primary" type="submit">Save settings</button></div>
       </form>

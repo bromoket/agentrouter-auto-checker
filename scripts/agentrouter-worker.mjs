@@ -807,7 +807,7 @@ async function completeGithubAuthentication(page, account, config) {
   }
   throw new Error(
     "GitHub authentication did not reach AgentRouter or expose a usable GitHub Mobile challenge before the timeout. " +
-      "Confirm the configured account can use username/password and that GitHub Mobile is available, or use Visible fallback once to inspect the offered method.",
+      "Confirm the configured account can use username/password and that GitHub Mobile approval is available.",
   );
 }
 
@@ -1039,7 +1039,7 @@ async function readTopLevelJson(page) {
 async function completeAgentRouterAccessVerification(context, page, account, config, userId, apiCalls) {
   if (config.browserHeadless) {
     throw new Error(
-      "AgentRouter returned its interactive Access Verification slider. Run this account in the visible browser once so the persistent profile can retain the verification state.",
+      "AgentRouter returned its Access Verification slider. Complete it in the server browser so the persistent profile can retain the verification state.",
     );
   }
 
@@ -1145,19 +1145,24 @@ async function dismissBlockingOverlays(page) {
   }
 }
 
-async function logoutViaApi(page, config, apiCalls) {
+async function logoutViaApi(page, config, userId, apiCalls) {
   const started = Date.now();
-  const response = await page.evaluate(async () => {
+  const response = await page.evaluate(async (numericUserId) => {
+    const headers = {
+      Accept: 'application/json',
+      'Cache-Control': 'no-store',
+      'New-API-User': String(numericUserId),
+    };
     const result = await fetch('/api/user/logout', {
       method: 'GET',
       credentials: 'include',
-      headers: { Accept: 'application/json', 'Cache-Control': 'no-store' },
+      headers,
     });
     const payload = await result.json().catch(() => null);
     const self = await fetch('/api/user/self', {
       method: 'GET',
       credentials: 'include',
-      headers: { Accept: 'application/json', 'Cache-Control': 'no-store' },
+      headers,
     });
     const selfPayload = await self.json().catch(() => null);
     return {
@@ -1168,14 +1173,14 @@ async function logoutViaApi(page, config, apiCalls) {
         (self.status === 401 || self.status === 403 || selfPayload?.success === false),
       contentType: result.headers.get('content-type') ?? '',
     };
-  }).catch(() => null);
+  }, userId).catch(() => null);
   apiCalls.push({
     path: '/api/user/logout',
     status: response?.status ?? 0,
     ok: response?.ok === true,
     contentType: response?.contentType ?? '',
     durationMs: Date.now() - started,
-    source: 'api-logout-fallback',
+    source: 'api-logout',
   });
   if (!response?.ok) return false;
   await page.evaluate(() => localStorage.removeItem('user')).catch(() => undefined);
@@ -1186,11 +1191,51 @@ async function logoutViaApi(page, config, apiCalls) {
   return new URL(page.url()).pathname === '/login' && !(await readStoredUser(page));
 }
 
+async function captureAgentRouterApiToken(page, config, userId, apiCalls) {
+  const started = Date.now();
+  const response = await page.evaluate(async (numericUserId) => {
+    const result = await fetch('/api/token/?p=0&size=100', {
+      credentials: 'include',
+      headers: {
+        Accept: 'application/json',
+        'Cache-Control': 'no-store',
+        'New-API-User': String(numericUserId),
+      },
+    });
+    const payload = await result.json().catch(() => null);
+    return { status: result.status, ok: result.ok, payload };
+  }, userId).catch(() => null);
+  apiCalls.push({
+    path: '/api/token/?p=0&size=100',
+    method: 'GET',
+    status: response?.status ?? 0,
+    ok: Boolean(response?.ok),
+    latencyMs: Date.now() - started,
+    contentType: 'application/json',
+  });
+  if (!response?.ok || response.payload?.success !== true) return null;
+  const items = Array.isArray(response.payload?.data?.items) ? response.payload.data.items : [];
+  const nowSeconds = Math.floor(Date.now() / 1_000);
+  const candidates = items
+    .filter((item) => item && Number(item.status) === 1)
+    .filter((item) => !Number(item.expired_time) || Number(item.expired_time) > nowSeconds)
+    .filter((item) => typeof item.key === 'string' && /^sk-[A-Za-z0-9_-]{20,256}$/.test(item.key.trim()))
+    .sort((left, right) => Number(right.accessed_time || right.created_time || 0) - Number(left.accessed_time || left.created_time || 0));
+  return candidates[0]?.key.trim() || null;
+}
+
 async function logoutAndPersist(context, page, config, userId, statePath, apiCalls) {
   const started = Date.now();
   let redirectedToLogin = false;
   let uiError = "";
+  let logoutMethod = "api";
   if (!page.isClosed()) {
+    // The endpoint is the same operation used by the UI and avoids waiting on
+    // Semi Design hover/menu animations that are not reliable on the server.
+    redirectedToLogin = await logoutViaApi(page, config, userId, apiCalls);
+  }
+  if (!redirectedToLogin && !page.isClosed()) {
+    logoutMethod = "visible-quit-fallback";
     try {
       await page.goto(`${config.baseUrl}/console`, {
         waitUntil: "domcontentloaded",
@@ -1213,20 +1258,17 @@ async function logoutAndPersist(context, page, config, userId, statePath, apiCal
       uiError = errorText(error);
     }
   }
-  if (!redirectedToLogin && !page.isClosed()) {
-    redirectedToLogin = await logoutViaApi(page, config, apiCalls);
-  }
   const loggedOut = redirectedToLogin && !(await readStoredUser(page));
   apiCalls.push({
-    path: "/console → profile menu → Quit",
-    method: "UI",
+    path: logoutMethod === "api" ? "/api/user/logout → /login" : "/console → profile menu → Quit",
+    method: logoutMethod === "api" ? "GET" : "UI",
     status: loggedOut ? 200 : 0,
     ok: loggedOut,
     latencyMs: Date.now() - started,
     responsePath: page.url(),
     contentType: "text/html",
     ...(uiError ? { uiError } : {}),
-    ...(!loggedOut ? { error: "Neither the visible Quit flow nor the API fallback reached /login." } : {}),
+    ...(!loggedOut ? { error: "Neither the logout endpoint nor the visible Quit fallback reached /login." } : {}),
   });
   await persistGithubState(context, statePath);
   return loggedOut;
@@ -1463,7 +1505,15 @@ async function runWorker({ account, config }) {
       },
     };
 
-    progress("logging-out", "Data captured. Opening the profile menu and clicking Quit.", 90);
+    progress("capturing-token", "Data captured. Capturing the active AgentRouter API token.", 86);
+    result.capturedApiToken = await captureAgentRouterApiToken(
+      activePage,
+      config,
+      authenticatedUserId,
+      result.apiCalls,
+    ) ?? undefined;
+
+    progress("logging-out", "Token captured. Verifying AgentRouter logout.", 92);
     result.loggedOut = await logoutAndPersist(
       context,
       activePage,

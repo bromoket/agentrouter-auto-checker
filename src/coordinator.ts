@@ -303,6 +303,20 @@ export class CheckCoordinator {
           snapshot = failedSnapshot(account, accountStartedAt, error);
         }
 
+        const capturedApiToken = snapshot.capturedApiToken;
+        if (capturedApiToken) {
+          delete snapshot.capturedApiToken;
+          try {
+            await this.accounts.setApiToken(account.id, capturedApiToken);
+          } catch (error) {
+            this.appendEvent({
+              stage: "token-save-warning",
+              message: `Data captured, but the AgentRouter API token could not be saved: ${error instanceof Error ? error.message : "unknown error"}`,
+              percent: this.status.progressPercent,
+              at: new Date().toISOString(),
+            });
+          }
+        }
         const runId = this.store.saveRun(snapshot);
         await this.telegram?.processRun(runId, snapshot);
         this.status.completedAccounts += 1;

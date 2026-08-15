@@ -67,6 +67,14 @@ describe("Store", () => {
       latencyMs: 20,
     });
     expect(id).toBeGreaterThan(0);
+    expect(store.listEndpointObservations("account-1", 10)).toEqual([
+      expect.objectContaining({
+        id,
+        status: "ok",
+        balance: 267.5,
+        consumed: 132.5,
+      }),
+    ]);
   });
   test("persists normalized runs and metrics", () => {
     const store = createStore();

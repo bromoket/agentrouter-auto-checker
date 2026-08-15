@@ -54,9 +54,11 @@ export interface RunSnapshot {
   sessionReused: boolean;
   errorMessage?: string;
   screenshotPath?: string;
+  capturedApiToken?: string;
 }
 
 export interface EndpointObservation {
+  id?: number;
   accountId: string;
   accountLabel: string;
   observedAt: string;
@@ -303,6 +305,40 @@ export class Store {
       observation.errorMessage ?? null,
     );
     return Number(result.lastInsertRowid);
+  }
+
+  listEndpointObservations(accountId: string, limit: number): EndpointObservation[] {
+    const rows = this.db.prepare(`
+      SELECT * FROM endpoint_observations
+      WHERE account_id = ?
+      ORDER BY observed_at DESC
+      LIMIT ?
+    `).all(accountId, safeLimit(limit, 10_000)) as Array<{
+      id: number;
+      account_id: string;
+      account_label: string;
+      observed_at: string;
+      status: "ok" | "error";
+      balance: number | null;
+      consumed: number | null;
+      request_count: number | null;
+      source_path: string | null;
+      latency_ms: number;
+      error_message: string | null;
+    }>;
+    return rows.map((row) => ({
+      id: row.id,
+      accountId: row.account_id,
+      accountLabel: row.account_label,
+      observedAt: row.observed_at,
+      status: row.status,
+      balance: row.balance ?? undefined,
+      consumed: row.consumed ?? undefined,
+      requestCount: row.request_count ?? undefined,
+      sourcePath: row.source_path ?? undefined,
+      latencyMs: row.latency_ms,
+      errorMessage: row.error_message ?? undefined,
+    }));
   }
 
   private backfillCreditObservations(): void {

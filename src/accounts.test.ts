@@ -75,6 +75,21 @@ describe("AccountStore", () => {
     expect(stored.runOrder).toBe(7);
   });
 
+  test("stores a captured API token without exposing its value publicly", async () => {
+    const store = await temporaryStore();
+    const account = await store.upsert({
+      githubUsername: "octocat",
+      githubPassword: "test-password",
+    });
+    const token = `sk-${"a".repeat(32)}`;
+
+    expect(await store.setApiToken(account.id, token)).toBe(true);
+    expect(await store.getApiToken(account.id)).toBe(token);
+    const [publicAccount] = await store.listPublic();
+    expect(publicAccount.hasApiToken).toBe(true);
+    expect(publicAccount).not.toHaveProperty("agentRouterApiToken");
+  });
+
   test("rejects duplicate usernames and invalid GitHub usernames", async () => {
     const store = await temporaryStore();
     await store.upsert({

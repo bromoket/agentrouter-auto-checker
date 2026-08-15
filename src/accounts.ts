@@ -205,6 +205,21 @@ export class AccountStore {
     return (await this.load()).map(publicAccount);
   }
 
+  async setApiToken(id: string, token: string): Promise<boolean> {
+    if (!ID_PATTERN.test(id) || !/^sk-[A-Za-z0-9_-]{20,256}$/.test(token)) return false;
+    const accounts = await this.load();
+    const index = accounts.findIndex((account) => account.id === id);
+    if (index < 0) return false;
+    accounts[index] = { ...accounts[index], agentRouterApiToken: token };
+    await this.write(accounts);
+    return true;
+  }
+
+  async getApiToken(id: string): Promise<string | null> {
+    if (!ID_PATTERN.test(id)) return null;
+    return (await this.load()).find((account) => account.id === id)?.agentRouterApiToken ?? null;
+  }
+
   async upsert(input: AccountInput): Promise<PublicAccount> {
     const accounts = await this.load();
     const requestedId = asTrimmedString(input.id).toLowerCase();

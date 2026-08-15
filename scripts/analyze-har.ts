@@ -25,9 +25,15 @@ function jsonShape(text: string | undefined, encoding: string | undefined): stri
       const first = data[0];
       return `${top}; data=array(${data.length})${first && typeof first === "object" ? ` first=${Object.keys(first).slice(0, 30).join(",")}` : ""}`;
     }
-    return data && typeof data === "object"
-      ? `${top}; data=${Object.keys(data).slice(0, 40).join(",")}`
-      : top;
+    if (data && typeof data === "object") {
+      const dataRecord = data as Record<string, unknown>;
+      const items = dataRecord.items;
+      const itemShape = Array.isArray(items) && items[0] && typeof items[0] === "object"
+        ? ` items[0]=${Object.keys(items[0]).slice(0, 40).join(",")}`
+        : "";
+      return `${top}; data=${Object.keys(dataRecord).slice(0, 40).join(",")}${itemShape}`;
+    }
+    return top;
   } catch {
     return "non-json";
   }

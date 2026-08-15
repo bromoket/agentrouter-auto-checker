@@ -170,11 +170,32 @@ export function startDashboard(
         if (method === "GET" && url.pathname === "/api/overview") {
           const accounts = await accountStore.listPublic();
           const accountData = accounts.map((account) => {
-            const history = store.listMetricHistory(account.id, 500);
+            const history = store.listMetricHistory(account.id, 120);
             const successfulHistory = history.filter((item) => item.status === "ok");
-            const latest = successfulHistory.at(-1) ?? null;
-            const credits = store.listCreditObservations(account.id, 1_000);
-            const grants = store.listCreditGrantEvents(account.id, 1_000);
+            const browserLatest = successfulHistory.at(-1) ?? null;
+            const credits = store.listCreditObservations(account.id, 120);
+            const grants = store.listCreditGrantEvents(account.id, 120);
+            // The overview only needs chart-resolution samples. Full observations
+            // remain available through the account endpoint and exports.
+            const endpointObservations = store.listEndpointObservations(account.id, 180);
+            const latestEndpoint = endpointObservations.find((item) => item.status === "ok") ?? null;
+            const latest = latestEndpoint && (
+              !browserLatest || Date.parse(latestEndpoint.observedAt) > Date.parse(browserLatest.startedAt)
+            ) ? {
+              startedAt: latestEndpoint.observedAt,
+              status: "ok" as const,
+              loginMs: 0,
+              dashboardMs: 0,
+              totalMs: latestEndpoint.latencyMs,
+              loggedOut: undefined,
+              metrics: {
+                balance: latestEndpoint.balance,
+                consumed: latestEndpoint.consumed,
+                requestCount: latestEndpoint.requestCount,
+                statisticalTokens: undefined,
+              },
+              source: "endpoint" as const,
+            } : browserLatest;
             const observedEarnings = credits.reduce(
               (total, item) => total + Math.max(0, Number(item.balanceDelta) || 0),
               0,
@@ -185,6 +206,7 @@ export function startDashboard(
               history,
               credits,
               grants,
+              endpointObservations,
               usage: store.listUsagePoints(account.id, "day"),
               observedEarnings,
               confirmedEarnings: grants.reduce((total, item) => total + item.amount, 0),
@@ -262,6 +284,21 @@ export function startDashboard(
           return json(store.listCreditGrantEvents(id, limit));
         }
 
+        if (method === "GET" && url.pathname.startsWith("/api/endpoint-observations/")) {
+          const id = parseAccountId(url.pathname, "/api/endpoint-observations/");
+          if (!id) return errorResponse("Invalid account id.", 400);
+          const limit = boundedInteger(url.searchParams.get("limit"), 2_000, 10_000);
+          return json(store.listEndpointObservations(id, limit));
+        }
+
+        if (method === "GET" && url.pathname.startsWith("/api/account-token/")) {
+          const id = parseAccountId(url.pathname, "/api/account-token/");
+          if (!id) return errorResponse("Invalid account id.", 400);
+          const token = await accountStore.getApiToken(id);
+          if (!token) return errorResponse("No captured AgentRouter API token is available yet.", 404);
+          return json({ token });
+        }
+
         if (method === "GET" && url.pathname.startsWith("/api/export/")) {
           const id = parseAccountId(url.pathname, "/api/export/");
           if (!id) return errorResponse("Invalid account id.", 400);
@@ -275,6 +312,7 @@ export function startDashboard(
             automation,
             creditObservations: store.listCreditObservations(id, 5_000),
             creditGrantEvents: store.listCreditGrantEvents(id, 5_000),
+            endpointObservations: store.listEndpointObservations(id, 10_000),
             metricHistory: store.listMetricHistory(id, 5_000),
             usage: {
               hour: store.listUsagePoints(id, "hour"),
@@ -347,7 +385,6 @@ export function startDashboard(
           const accountId = typeof body.accountId === "string" && body.accountId
             ? body.accountId.trim()
             : undefined;
-          const interactive = body.interactive === true;
           if (accountId && !ACCOUNT_ID_PATTERN.test(accountId)) {
             return errorResponse("Invalid account id.", 400);
           }
@@ -355,11 +392,11 @@ export function startDashboard(
             return errorResponse("A check cycle is already running.", 409);
           }
           void coordinator
-            .runCycle(accountId, interactive ? { browserHeadless: false } : {})
+            .runCycle(accountId)
             .catch((error) => {
             console.error(`Manual check failed: ${error instanceof Error ? error.message : error}`);
           });
-          return json({ accepted: true, interactive }, 202);
+          return json({ accepted: true }, 202);
         }
 
         if (method === "POST" && url.pathname === "/api/checks/stop") {
