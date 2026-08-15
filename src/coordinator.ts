@@ -151,7 +151,9 @@ export class CheckCoordinator {
           continue;
         }
         if (Date.now() >= nextPollAt) {
-          const accounts = (await this.accounts.load()).filter((account) => account.enabled);
+          const accounts = (await this.accounts.load()).filter(
+            (account) => account.enabled && Boolean(account.agentRouterApiToken),
+          );
           for (const account of accounts) {
             const observation = await pollAccountEndpoints(account, this.config);
             this.store.saveEndpointObservation(observation);
