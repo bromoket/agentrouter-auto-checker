@@ -33,6 +33,24 @@ function jsonShape(text: string | undefined, encoding: string | undefined): stri
   }
 }
 
+function safeIdentity(text: string | undefined, encoding: string | undefined): Record<string, unknown> | undefined {
+  if (!text) return undefined;
+  try {
+    const decoded = encoding === "base64" ? Buffer.from(text, "base64").toString("utf8") : text;
+    const payload = JSON.parse(decoded) as { data?: Record<string, unknown> };
+    const data = payload.data;
+    if (!data) return undefined;
+    return {
+      id: Number.isSafeInteger(Number(data.id)) ? Number(data.id) : undefined,
+      username: typeof data.username === "string" ? data.username : undefined,
+      displayName: typeof data.display_name === "string" ? data.display_name : undefined,
+      githubId: Number.isSafeInteger(Number(data.github_id)) ? Number(data.github_id) : undefined,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
 const harPath = process.argv[2];
 if (!harPath) throw new Error("Usage: bun run scripts/analyze-har.ts <capture.har>");
 const parsed = JSON.parse((await readFile(harPath, "utf8")).replace(/^\uFEFF/, "")) as {
@@ -72,6 +90,9 @@ for (const entry of interesting) {
     contentType,
     authHeaders: [...new Set(headerNames)],
     responseShape: jsonShape(entry.response?.content?.text, entry.response?.content?.encoding),
+    identity: url.pathname === "/api/user/self"
+      ? safeIdentity(entry.response?.content?.text, entry.response?.content?.encoding)
+      : undefined,
     timeMs: Math.round(entry.time ?? 0),
   }));
 }
