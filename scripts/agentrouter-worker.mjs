@@ -1154,9 +1154,18 @@ async function logoutViaApi(page, config, apiCalls) {
       headers: { Accept: 'application/json', 'Cache-Control': 'no-store' },
     });
     const payload = await result.json().catch(() => null);
+    const self = await fetch('/api/user/self', {
+      method: 'GET',
+      credentials: 'include',
+      headers: { Accept: 'application/json', 'Cache-Control': 'no-store' },
+    });
+    const selfPayload = await self.json().catch(() => null);
     return {
       status: result.status,
-      ok: result.ok && payload?.success === true,
+      ok:
+        result.ok &&
+        payload?.success === true &&
+        (self.status === 401 || self.status === 403 || selfPayload?.success === false),
       contentType: result.headers.get('content-type') ?? '',
     };
   }).catch(() => null);
@@ -1169,6 +1178,7 @@ async function logoutViaApi(page, config, apiCalls) {
     source: 'api-logout-fallback',
   });
   if (!response?.ok) return false;
+  await page.evaluate(() => localStorage.removeItem('user')).catch(() => undefined);
   await page.goto(`${config.baseUrl}/login`, {
     waitUntil: 'domcontentloaded',
     timeout: config.requestTimeoutMs,
