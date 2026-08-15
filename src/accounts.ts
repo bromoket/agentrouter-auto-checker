@@ -72,7 +72,7 @@ function validateStoredAccount(value: unknown, index: number): GitHubAccount {
   if (!githubPassword || githubPassword.length > 512) {
     throw new Error(`Account ${index + 1} must have a password of at most 512 characters.`);
   }
-  if (agentRouterApiToken && (!/^sk-[A-Za-z0-9_-]{20,256}$/.test(agentRouterApiToken))) {
+  if (agentRouterApiToken && (!/^[A-Za-z0-9_-]{20,256}$/.test(agentRouterApiToken))) {
     throw new Error(`Account ${index + 1} has an invalid AgentRouter API token.`);
   }
   if (label.length > 80) {
@@ -206,7 +206,7 @@ export class AccountStore {
   }
 
   async setApiToken(id: string, token: string): Promise<boolean> {
-    if (!ID_PATTERN.test(id) || !/^sk-[A-Za-z0-9_-]{20,256}$/.test(token)) return false;
+    if (!ID_PATTERN.test(id) || !/^[A-Za-z0-9_-]{20,256}$/.test(token)) return false;
     const accounts = await this.load();
     const index = accounts.findIndex((account) => account.id === id);
     if (index < 0) return false;

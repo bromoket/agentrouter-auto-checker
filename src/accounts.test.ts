@@ -81,7 +81,7 @@ describe("AccountStore", () => {
       githubUsername: "octocat",
       githubPassword: "test-password",
     });
-    const token = `sk-${"a".repeat(32)}`;
+    const token = "a".repeat(48);
 
     expect(await store.setApiToken(account.id, token)).toBe(true);
     expect(await store.getApiToken(account.id)).toBe(token);
