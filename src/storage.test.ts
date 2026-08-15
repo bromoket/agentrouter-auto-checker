@@ -54,6 +54,20 @@ afterEach(() => {
 });
 
 describe("Store", () => {
+  test("persists endpoint observations without pretending a logout occurred", () => {
+    const store = createStore();
+    const id = store.saveEndpointObservation({
+      accountId: "account-1",
+      accountLabel: "Account 1",
+      observedAt: "2026-08-15T00:00:00.000Z",
+      status: "ok",
+      balance: 267.5,
+      consumed: 132.5,
+      sourcePath: "/v1/dashboard/billing/subscription + /v1/dashboard/billing/usage",
+      latencyMs: 20,
+    });
+    expect(id).toBeGreaterThan(0);
+  });
   test("persists normalized runs and metrics", () => {
     const store = createStore();
     const id = store.saveRun(snapshot());

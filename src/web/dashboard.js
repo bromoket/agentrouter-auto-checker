@@ -674,27 +674,27 @@ async function stopChecks() {
 
 function openAccountDialog(account = null) {
   byId("dialog-title").textContent = account ? "Edit account" : "Add account";
-  byId("account-id").value = account?.id || ""; byId("github-username").value = account?.githubUsername || ""; byId("account-label").value = account?.label || ""; byId("github-password").value = ""; byId("github-password").required = !account; byId("password-help").textContent = account ? "Leave blank to keep the saved password." : "Required for a new account."; byId("account-enabled").checked = account?.enabled ?? true; byId("account-run-order").value = String(account?.runOrder ?? state.accounts.length); byId("form-error").textContent = "";
+  byId("account-id").value = account?.id || ""; byId("github-username").value = account?.githubUsername || ""; byId("account-label").value = account?.label || ""; byId("github-password").value = ""; byId("github-password").required = !account; byId("password-help").textContent = account ? "Leave blank to keep the saved password." : "Required for a new account."; byId("agentrouter-api-token").value = ""; byId("api-token-help").textContent = account?.hasApiToken ? "Leave blank to keep the saved API token." : "Optional. Enables browser-free minute polling."; byId("account-enabled").checked = account?.enabled ?? true; byId("account-run-order").value = String(account?.runOrder ?? state.accounts.length); byId("form-error").textContent = "";
   byId("account-dialog").showModal(); byId("github-username").focus();
 }
 
 async function saveAccount(event) {
   event.preventDefault();
   try {
-    const result = await api("/api/accounts", { method: "POST", body: { id: byId("account-id").value || undefined, githubUsername: byId("github-username").value, label: byId("account-label").value, githubPassword: byId("github-password").value, enabled: byId("account-enabled").checked, runOrder: Number(byId("account-run-order").value) } });
+    const result = await api("/api/accounts", { method: "POST", body: { id: byId("account-id").value || undefined, githubUsername: byId("github-username").value, label: byId("account-label").value, githubPassword: byId("github-password").value, agentRouterApiToken: byId("agentrouter-api-token").value, enabled: byId("account-enabled").checked, runOrder: Number(byId("account-run-order").value) } });
     byId("account-dialog").close(); state.selectedId = result.account.id; showToast("Account saved in the protected local credential file."); await loadCore(true);
   } catch (error) { byId("form-error").textContent = error.message; }
 }
 
 function openSettingsDialog() {
   const automation = state.settings?.automation; if (!automation) return;
-  byId("interval-minutes").value = automation.intervalMinutes; byId("account-delay-seconds").value = automation.accountDelaySeconds; byId("two-factor-timeout").value = automation.twoFactorTimeoutMinutes; byId("activity-lookback").value = automation.activityLookbackDays; byId("scheduler-enabled").checked = automation.schedulerEnabled; byId("run-on-start").checked = automation.runOnStart; byId("open-on-start").checked = automation.openDashboardOnStart; byId("browser-headless").checked = automation.browserHeadless; byId("capture-screenshots").checked = automation.captureScreenshots; byId("settings-error").textContent = ""; byId("settings-dialog").showModal();
+  byId("interval-minutes").value = automation.intervalMinutes; byId("endpoint-poll-interval").value = automation.endpointPollIntervalMinutes; byId("account-delay-seconds").value = automation.accountDelaySeconds; byId("two-factor-timeout").value = automation.twoFactorTimeoutMinutes; byId("activity-lookback").value = automation.activityLookbackDays; byId("scheduler-enabled").checked = automation.schedulerEnabled; byId("endpoint-polling-enabled").checked = automation.endpointPollingEnabled; byId("run-on-start").checked = automation.runOnStart; byId("open-on-start").checked = automation.openDashboardOnStart; byId("browser-headless").checked = automation.browserHeadless; byId("capture-screenshots").checked = automation.captureScreenshots; byId("settings-error").textContent = ""; byId("settings-dialog").showModal();
 }
 
 async function saveSettings(event) {
   event.preventDefault();
   try {
-    const result = await api("/api/settings", { method: "PUT", body: { intervalMinutes: Number(byId("interval-minutes").value), accountDelaySeconds: Number(byId("account-delay-seconds").value), twoFactorTimeoutMinutes: Number(byId("two-factor-timeout").value), activityLookbackDays: Number(byId("activity-lookback").value), schedulerEnabled: byId("scheduler-enabled").checked, runOnStart: byId("run-on-start").checked, openDashboardOnStart: byId("open-on-start").checked, browserHeadless: byId("browser-headless").checked, captureScreenshots: byId("capture-screenshots").checked } });
+    const result = await api("/api/settings", { method: "PUT", body: { intervalMinutes: Number(byId("interval-minutes").value), endpointPollIntervalMinutes: Number(byId("endpoint-poll-interval").value), accountDelaySeconds: Number(byId("account-delay-seconds").value), twoFactorTimeoutMinutes: Number(byId("two-factor-timeout").value), activityLookbackDays: Number(byId("activity-lookback").value), schedulerEnabled: byId("scheduler-enabled").checked, endpointPollingEnabled: byId("endpoint-polling-enabled").checked, runOnStart: byId("run-on-start").checked, openDashboardOnStart: byId("open-on-start").checked, browserHeadless: byId("browser-headless").checked, captureScreenshots: byId("capture-screenshots").checked } });
     state.settings.automation = result.automation; byId("settings-dialog").close(); showToast("Automation settings saved."); await loadCore(false);
   } catch (error) { byId("settings-error").textContent = error.message; }
 }

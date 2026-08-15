@@ -241,6 +241,7 @@
           <label>Display label<input id="account-label" name="label" maxlength="80" placeholder="Defaults to username"></label>
         </div>
         <label>GitHub password<input id="github-password" name="githubPassword" type="password" autocomplete="current-password" maxlength="512"><small id="password-help">Required for a new account.</small></label>
+        <label>AgentRouter API token<input id="agentrouter-api-token" name="agentRouterApiToken" type="password" autocomplete="off" maxlength="259" placeholder="sk-..."><small id="api-token-help">Optional. Enables browser-free minute polling.</small></label>
         <div class="field-grid">
           <label>Run order<input id="account-run-order" name="runOrder" type="number" min="0" max="10000" step="1" value="0"></label>
           <label class="switch-row"><input id="account-enabled" name="enabled" type="checkbox" checked><span class="switch"></span><span>Scheduled checks enabled</span></label>
@@ -255,18 +256,20 @@
         <div class="dialog-heading"><div><p class="eyebrow">AUTOMATION ENGINE</p><h2>Schedule & collection</h2></div><button id="close-settings" class="icon-button" type="button" aria-label="Close">×</button></div>
         <div class="field-grid">
           <label>Cycle interval <span>minutes</span><input id="interval-minutes" type="number" min="5" max="10080" step="1" required></label>
+          <label>Endpoint poll interval <span>minutes</span><input id="endpoint-poll-interval" type="number" min="1" max="1440" step="1" required></label>
           <label>Account gap <span>seconds</span><input id="account-delay-seconds" type="number" min="0" max="3600" step="1" required></label>
           <label>Mobile approval timeout <span>minutes</span><input id="two-factor-timeout" type="number" min="1" max="30" step="1" required></label>
           <label>Activity lookback <span>days</span><input id="activity-lookback" type="number" min="1" max="28" step="1" required></label>
         </div>
         <div class="switch-grid">
           <label class="switch-row"><input id="scheduler-enabled" type="checkbox"><span class="switch"></span><span>Scheduled cycles</span></label>
+          <label class="switch-row"><input id="endpoint-polling-enabled" type="checkbox"><span class="switch"></span><span>Read-only endpoint polling</span></label>
           <label class="switch-row"><input id="run-on-start" type="checkbox"><span class="switch"></span><span>Run on startup</span></label>
           <label class="switch-row"><input id="open-on-start" type="checkbox"><span class="switch"></span><span>Open dashboard on startup</span></label>
           <label class="switch-row"><input id="browser-headless" type="checkbox"><span class="switch"></span><span>Headless Chromium</span></label>
           <label class="switch-row"><input id="capture-screenshots" type="checkbox"><span class="switch"></span><span>Capture screenshots</span></label>
         </div>
-        <div class="info-callout"><strong>Persistent browser authentication</strong><p>Visible Chromium is the verified default and reuses its isolated GitHub profile between cycles. Headless mode is experimental: initialize the profile visibly before moving it to an unattended server.</p></div>
+        <div class="info-callout"><strong>Two independent schedules</strong><p>Browser cycles handle GitHub OAuth and verified logout. Read-only endpoint polling uses each account's AgentRouter API token and does not launch Chromium.</p></div>
         <p id="settings-error" class="form-error" role="alert"></p>
         <div class="dialog-actions"><button id="cancel-settings" class="button ghost" type="button">Cancel</button><button class="button primary" type="submit">Save settings</button></div>
       </form>

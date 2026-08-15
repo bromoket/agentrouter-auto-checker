@@ -7,6 +7,7 @@ export interface GitHubAccount {
   label: string;
   githubUsername: string;
   githubPassword: string;
+  agentRouterApiToken?: string;
   enabled: boolean;
   runOrder: number;
 }
@@ -17,6 +18,7 @@ export interface PublicAccount {
   githubUsername: string;
   enabled: boolean;
   hasPassword: boolean;
+  hasApiToken: boolean;
   runOrder: number;
 }
 
@@ -25,6 +27,7 @@ export interface AccountInput {
   label?: unknown;
   githubUsername?: unknown;
   githubPassword?: unknown;
+  agentRouterApiToken?: unknown;
   enabled?: unknown;
   runOrder?: unknown;
 }
@@ -51,6 +54,9 @@ function validateStoredAccount(value: unknown, index: number): GitHubAccount {
   const id = asTrimmedString(candidate.id).toLowerCase();
   const githubUsername = asTrimmedString(candidate.githubUsername);
   const githubPassword = typeof candidate.githubPassword === "string" ? candidate.githubPassword : "";
+  const agentRouterApiToken = typeof candidate.agentRouterApiToken === "string"
+    ? candidate.agentRouterApiToken.trim()
+    : undefined;
   const label = asTrimmedString(candidate.label) || githubUsername;
   const requestedOrder = Number(candidate.runOrder);
   const runOrder = Number.isSafeInteger(requestedOrder) && requestedOrder >= 0
@@ -66,6 +72,9 @@ function validateStoredAccount(value: unknown, index: number): GitHubAccount {
   if (!githubPassword || githubPassword.length > 512) {
     throw new Error(`Account ${index + 1} must have a password of at most 512 characters.`);
   }
+  if (agentRouterApiToken && (!/^sk-[A-Za-z0-9_-]{20,256}$/.test(agentRouterApiToken))) {
+    throw new Error(`Account ${index + 1} has an invalid AgentRouter API token.`);
+  }
   if (label.length > 80) {
     throw new Error(`Account ${index + 1} has a label longer than 80 characters.`);
   }
@@ -75,6 +84,7 @@ function validateStoredAccount(value: unknown, index: number): GitHubAccount {
     label,
     githubUsername,
     githubPassword,
+    agentRouterApiToken,
     enabled: candidate.enabled !== false,
     runOrder,
   };
@@ -119,6 +129,7 @@ function publicAccount(account: GitHubAccount): PublicAccount {
     githubUsername: account.githubUsername,
     enabled: account.enabled,
     hasPassword: account.githubPassword.length > 0,
+    hasApiToken: Boolean(account.agentRouterApiToken),
     runOrder: account.runOrder,
   };
 }
@@ -205,6 +216,10 @@ export class AccountStore {
     const githubUsername = asTrimmedString(input.githubUsername) || existing?.githubUsername || "";
     const suppliedPassword = typeof input.githubPassword === "string" ? input.githubPassword : "";
     const githubPassword = suppliedPassword || existing?.githubPassword || "";
+    const suppliedApiToken = typeof input.agentRouterApiToken === "string"
+      ? input.agentRouterApiToken.trim()
+      : "";
+    const agentRouterApiToken = suppliedApiToken || existing?.agentRouterApiToken;
     const label = asTrimmedString(input.label) || existing?.label || githubUsername;
     const id = existing?.id || (requestedId && ID_PATTERN.test(requestedId)
       ? requestedId
@@ -216,6 +231,7 @@ export class AccountStore {
         label,
         githubUsername,
         githubPassword,
+        agentRouterApiToken,
         enabled: typeof input.enabled === "boolean" ? input.enabled : existing?.enabled ?? true,
         runOrder: input.runOrder ?? existing?.runOrder ?? accounts.length,
       },

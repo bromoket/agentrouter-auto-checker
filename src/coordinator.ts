@@ -9,6 +9,7 @@ import { SettingsStore } from "./settings";
 import type { RunSnapshot } from "./storage";
 import { Store } from "./storage";
 import type { TelegramNotifier } from "./telegram";
+import { pollAccountEndpoints } from "./endpoint-poller";
 
 export interface CoordinatorStatus {
   running: boolean;
@@ -84,6 +85,7 @@ export class CheckCoordinator {
     events: [],
   };
   private schedulerStarted = false;
+  private endpointPollerStarted = false;
   private activeAbortController: AbortController | null = null;
 
   constructor(
@@ -133,6 +135,38 @@ export class CheckCoordinator {
     this.schedulerStarted = true;
     this.status.schedulerActive = true;
     void this.schedulerLoop();
+    if (!this.endpointPollerStarted) {
+      this.endpointPollerStarted = true;
+      void this.endpointPollingLoop();
+    }
+  }
+
+  private async endpointPollingLoop(): Promise<void> {
+    let nextPollAt = Date.now();
+    while (this.endpointPollerStarted) {
+      try {
+        const settings = await this.settings.load();
+        if (!settings.endpointPollingEnabled || this.status.running) {
+          await delay(1_000);
+          continue;
+        }
+        if (Date.now() >= nextPollAt) {
+          const accounts = (await this.accounts.load()).filter((account) => account.enabled);
+          for (const account of accounts) {
+            const observation = await pollAccountEndpoints(account, this.config);
+            this.store.saveEndpointObservation(observation);
+            if (observation.status === "error") {
+              console.warn(`[endpoint-poll:${account.label}] ${observation.errorMessage}`);
+            }
+          }
+          nextPollAt = Date.now() + settings.endpointPollIntervalMinutes * 60_000;
+        }
+      } catch (error) {
+        console.error(`endpoint poller: ${error instanceof Error ? error.message : String(error)}`);
+        nextPollAt = Date.now() + 60_000;
+      }
+      await delay(1_000);
+    }
   }
 
   private async schedulerLoop(): Promise<void> {

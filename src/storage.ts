@@ -56,6 +56,19 @@ export interface RunSnapshot {
   screenshotPath?: string;
 }
 
+export interface EndpointObservation {
+  accountId: string;
+  accountLabel: string;
+  observedAt: string;
+  status: "ok" | "error";
+  balance?: number;
+  consumed?: number;
+  requestCount?: number;
+  sourcePath?: string;
+  latencyMs: number;
+  errorMessage?: string;
+}
+
 interface RawRunSnapshot {
   id: number;
   account_id: string;
@@ -241,9 +254,55 @@ export class Store {
       );
       CREATE INDEX IF NOT EXISTS idx_credit_grant_events_account_time
         ON credit_grant_events(account_id, occurred_at);
+
+      CREATE TABLE IF NOT EXISTS endpoint_observations (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        account_id TEXT NOT NULL,
+        account_label TEXT NOT NULL,
+        observed_at TEXT NOT NULL,
+        status TEXT NOT NULL CHECK(status IN ('ok', 'error')),
+        balance REAL,
+        consumed REAL,
+        request_count INTEGER,
+        source_path TEXT,
+        latency_ms INTEGER NOT NULL,
+        error_message TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_endpoint_observations_account_time
+        ON endpoint_observations(account_id, observed_at);
     `);
     this.backfillCreditObservations();
     this.backfillCreditGrantEvents();
+  }
+
+  saveEndpointObservation(observation: EndpointObservation): number {
+    if (observation.status === "ok") {
+      if (
+        !Number.isFinite(observation.balance) ||
+        !Number.isFinite(observation.consumed) ||
+        Number(observation.consumed) < 0
+      ) {
+        throw new Error("A successful endpoint observation requires finite balance and consumption values.");
+      }
+    }
+    const result = this.db.prepare(`
+      INSERT INTO endpoint_observations (
+        account_id, account_label, observed_at, status, balance, consumed,
+        request_count, source_path, latency_ms, error_message
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      observation.accountId,
+      observation.accountLabel,
+      observation.observedAt,
+      observation.status,
+      observation.balance ?? null,
+      observation.consumed ?? null,
+      observation.requestCount ?? null,
+      observation.sourcePath ?? null,
+      observation.latencyMs,
+      observation.errorMessage ?? null,
+    );
+    return Number(result.lastInsertRowid);
   }
 
   private backfillCreditObservations(): void {

@@ -5,6 +5,8 @@ import { randomUUID } from "node:crypto";
 export interface AutomationSettings {
   schedulerEnabled: boolean;
   intervalMinutes: number;
+  endpointPollingEnabled: boolean;
+  endpointPollIntervalMinutes: number;
   accountDelaySeconds: number;
   runOnStart: boolean;
   openDashboardOnStart: boolean;
@@ -22,6 +24,8 @@ interface SettingsFile {
 export const DEFAULT_AUTOMATION_SETTINGS: AutomationSettings = {
   schedulerEnabled: true,
   intervalMinutes: 60,
+  endpointPollingEnabled: true,
+  endpointPollIntervalMinutes: 1,
   accountDelaySeconds: 5,
   runOnStart: false,
   openDashboardOnStart: true,
@@ -53,6 +57,16 @@ export function validateAutomationSettings(value: unknown): AutomationSettings {
       DEFAULT_AUTOMATION_SETTINGS.schedulerEnabled,
     ),
     intervalMinutes: boundedInteger(candidate.intervalMinutes, 60, 5, 10_080),
+    endpointPollingEnabled: booleanValue(
+      candidate.endpointPollingEnabled,
+      DEFAULT_AUTOMATION_SETTINGS.endpointPollingEnabled,
+    ),
+    endpointPollIntervalMinutes: boundedInteger(
+      candidate.endpointPollIntervalMinutes,
+      DEFAULT_AUTOMATION_SETTINGS.endpointPollIntervalMinutes,
+      1,
+      1_440,
+    ),
     accountDelaySeconds: boundedInteger(candidate.accountDelaySeconds, 5, 0, 3_600),
     runOnStart: booleanValue(candidate.runOnStart, DEFAULT_AUTOMATION_SETTINGS.runOnStart),
     openDashboardOnStart: booleanValue(
