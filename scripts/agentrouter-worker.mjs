@@ -1218,7 +1218,7 @@ async function captureAgentRouterApiToken(page, config, userId, apiCalls) {
   const nowSeconds = Math.floor(Date.now() / 1_000);
   const candidates = items
     .filter((item) => item && Number(item.status) === 1)
-    .filter((item) => !Number(item.expired_time) || Number(item.expired_time) > nowSeconds)
+    .filter((item) => Number(item.expired_time) <= 0 || Number(item.expired_time) > nowSeconds)
     .filter((item) => typeof item.key === 'string' && /^sk-[A-Za-z0-9_-]{20,256}$/.test(item.key.trim()))
     .sort((left, right) => Number(right.accessed_time || right.created_time || 0) - Number(left.accessed_time || left.created_time || 0));
   return candidates[0]?.key.trim() || null;
