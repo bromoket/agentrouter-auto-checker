@@ -1137,7 +1137,7 @@ async function dismissBlockingOverlays(page) {
       '.semi-modal-wrap button:has-text("取消")',
     ).first();
     if (await close.isVisible().catch(() => false)) {
-      await close.click({ force: true, timeoutMs: 3_000 }).catch(() => undefined);
+      await close.click({ force: true, timeout: 3_000 }).catch(() => undefined);
     } else {
       await page.locator('body').press('Escape').catch(() => undefined);
     }
@@ -1179,30 +1179,29 @@ async function logoutViaApi(page, config, apiCalls) {
 async function logoutAndPersist(context, page, config, userId, statePath, apiCalls) {
   const started = Date.now();
   let redirectedToLogin = false;
+  let uiError = "";
   if (!page.isClosed()) {
-    await page.goto(`${config.baseUrl}/console`, {
-      waitUntil: "domcontentloaded",
-      timeout: config.requestTimeoutMs,
-    });
-    await page.locator("main").waitFor({ state: "visible", timeout: config.requestTimeoutMs });
-    await dismissBlockingOverlays(page);
-    const profileButton = page.locator('button[aria-haspopup="menu"]').first();
-    await profileButton.hover().catch(() => undefined);
-    await profileButton.click({ timeoutMs: 10_000 }).catch(async () => {
+    try {
+      await page.goto(`${config.baseUrl}/console`, {
+        waitUntil: "domcontentloaded",
+        timeout: config.requestTimeoutMs,
+      });
+      await page.locator("main").waitFor({ state: "visible", timeout: config.requestTimeoutMs });
       await dismissBlockingOverlays(page);
-      await profileButton.click({ force: true, timeoutMs: 5_000 });
-    });
-    const quit = page.getByRole("menuitem", { name: /Quit/i }).first();
-    await quit.waitFor({ state: "visible", timeout: 10_000 });
-    await quit.click();
-    await page.waitForURL(/\/login(?:[?#]|$)/, { timeout: 15_000 });
-    redirectedToLogin = (() => {
-      try {
-        return new URL(page.url()).pathname === "/login";
-      } catch {
-        return false;
-      }
-    })();
+      const profileButton = page.locator('button[aria-haspopup="menu"]').first();
+      await profileButton.hover().catch(() => undefined);
+      await profileButton.click({ timeout: 10_000 }).catch(async () => {
+        await dismissBlockingOverlays(page);
+        await profileButton.click({ force: true, timeout: 5_000 });
+      });
+      const quit = page.getByRole("menuitem", { name: /Quit/i }).first();
+      await quit.waitFor({ state: "visible", timeout: 10_000 });
+      await quit.click({ timeout: 10_000 });
+      await page.waitForURL(/\/login(?:[?#]|$)/, { timeout: 15_000 });
+      redirectedToLogin = new URL(page.url()).pathname === "/login";
+    } catch (error) {
+      uiError = errorText(error);
+    }
   }
   if (!redirectedToLogin && !page.isClosed()) {
     redirectedToLogin = await logoutViaApi(page, config, apiCalls);
@@ -1216,7 +1215,8 @@ async function logoutAndPersist(context, page, config, userId, statePath, apiCal
     latencyMs: Date.now() - started,
     responsePath: page.url(),
     contentType: "text/html",
-    ...(!loggedOut ? { error: "The visible Quit flow did not reach /login." } : {}),
+    ...(uiError ? { uiError } : {}),
+    ...(!loggedOut ? { error: "Neither the visible Quit flow nor the API fallback reached /login." } : {}),
   });
   await persistGithubState(context, statePath);
   return loggedOut;
