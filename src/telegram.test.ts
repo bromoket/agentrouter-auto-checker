@@ -6,7 +6,20 @@ import type { AppConfig } from "./config";
 import { createDashboardAuth } from "./dashboard-auth";
 import type { RunSnapshot } from "./storage";
 import { Store } from "./storage";
-import { buildQuotasMessages, TelegramNotifier } from "./telegram";
+import { ObservatoryStore } from "./observatory/store";
+import {
+  buildBalancesMessage,
+  buildBalancesMessages,
+  buildDashboardMessage,
+  buildHelpMessage,
+  buildQuotasMessages,
+  buildStatusMessage,
+  buildStatusMessages,
+  isCurrentBudapestDay,
+  selectUnifiedAccountSnapshots,
+  TelegramNotifier,
+  type TelegramUpdate,
+} from "./telegram";
 const resources: Array<{ directory: string; store: Store }> = [];
 
 function config(stateFilePath: string, overrides: Partial<AppConfig["telegram"]> = {}): AppConfig {
@@ -448,5 +461,462 @@ describe("TelegramNotifier", () => {
     expect(pages).toHaveLength(1);
     expect(pages[0]).toContain("__proto__");
     expect(pages[0].length).toBeLessThanOrEqual(4_096);
+  });
+
+  test("rejects command updates from unauthorized chat or username", async () => {
+    const { store, telegram, appConfig } = await fixture();
+    const notifier = (await TelegramNotifier.create(appConfig, store, telegram.fetcher))!;
+
+    const unauthorizedChat: TelegramUpdate = {
+      update_id: 1,
+      message: {
+        message_id: 101,
+        chat: { id: "999999999", type: "private" },
+        from: { id: 123456789, is_bot: false, first_name: "Owner", username: "bromoketone" },
+        date: Math.floor(Date.now() / 1000),
+        text: "/status",
+      },
+    };
+    const outcomeChat = await notifier.processCommandUpdate(unauthorizedChat, { store });
+    expect(outcomeChat).toBe("ignored");
+
+    const unauthorizedUser: TelegramUpdate = {
+      update_id: 2,
+      message: {
+        message_id: 102,
+        chat: { id: "123456789", type: "private" },
+        from: { id: 987654321, is_bot: false, first_name: "Attacker", username: "stranger" },
+        date: Math.floor(Date.now() / 1000),
+        text: "/status",
+      },
+    };
+    const outcomeUser = await notifier.processCommandUpdate(unauthorizedUser, { store });
+    expect(outcomeUser).toBe("ignored");
+
+    const messages = telegram.calls.filter((call) => call.method === "sendMessage");
+    expect(messages).toHaveLength(0);
+  });
+
+  test("responds to /start and /help commands with authorized username and dashboard link", async () => {
+    const { store, telegram, appConfig } = await fixture();
+    const notifier = (await TelegramNotifier.create(appConfig, store, telegram.fetcher))!;
+
+    const helpUpdate: TelegramUpdate = {
+      update_id: 1,
+      message: {
+        message_id: 101,
+        chat: { id: "123456789", type: "private" },
+        from: { id: 123456789, is_bot: false, first_name: "Owner", username: "bromoketone" },
+        date: Math.floor(Date.now() / 1000),
+        text: "/help",
+      },
+    };
+    const outcome = await notifier.processCommandUpdate(helpUpdate, { store });
+    expect(outcome).toBe("acknowledged");
+
+    const messages = telegram.calls.filter((call) => call.method === "sendMessage");
+    expect(messages).toHaveLength(1);
+    const text = (messages[0].body as { text: string }).text;
+    expect(text).toContain("AI Fleet Observatory Bot");
+    expect(text).toContain("@bromoketone");
+    expect(text).toContain("/status");
+    expect(text).toContain("/quotas");
+    expect(text).toContain("/balance");
+  });
+
+  test("responds to /ping and /dashboard commands", async () => {
+    const { store, telegram, appConfig } = await fixture();
+    const notifier = (await TelegramNotifier.create(appConfig, store, telegram.fetcher))!;
+
+    const pingUpdate: TelegramUpdate = {
+      update_id: 1,
+      message: {
+        message_id: 101,
+        chat: { id: "123456789", type: "private" },
+        from: { id: 123456789, is_bot: false, first_name: "Owner", username: "bromoketone" },
+        date: Math.floor(Date.now() / 1000),
+        text: "/ping",
+      },
+    };
+    const pingOutcome = await notifier.processCommandUpdate(pingUpdate, { store });
+    expect(pingOutcome).toBe("acknowledged");
+
+    const dashUpdate: TelegramUpdate = {
+      update_id: 2,
+      message: {
+        message_id: 102,
+        chat: { id: "123456789", type: "private" },
+        from: { id: 123456789, is_bot: false, first_name: "Owner", username: "bromoketone" },
+        date: Math.floor(Date.now() / 1000),
+        text: "/dashboard",
+      },
+    };
+    const dashOutcome = await notifier.processCommandUpdate(dashUpdate, { store });
+    expect(dashOutcome).toBe("acknowledged");
+
+    const messages = telegram.calls.filter((call) => call.method === "sendMessage");
+    expect(messages).toHaveLength(2);
+    expect((messages[0].body as { text: string }).text).toContain("Pong!");
+    expect((messages[1].body as { text: string }).text).toContain("AI Fleet Observatory Dashboard");
+  });
+
+  test("selectUnifiedAccountSnapshots unifies Observatory and Store observations coherently", () => {
+    const store = new Store(":memory:");
+    const obsStore = new ObservatoryStore(":memory:");
+
+    // 1. account-1 has older Observatory endpoint (12:00) and newer Observatory run (12:30)
+    obsStore.upsertAgentRouterAccount({ accountId: "account-1", accountLabel: "Primary Obs" });
+    obsStore.recordAgentRouterEndpointObservation({
+      accountId: "account-1",
+      accountLabel: "Primary Obs",
+      observedAt: "2026-09-01T12:00:00.000Z",
+      status: "ok",
+      balance: 100,
+      consumed: 10,
+      requestCount: 5,
+      latencyMs: 15,
+    });
+    obsStore.recordAgentRouterRun({
+      id: 1,
+      accountId: "account-1",
+      accountLabel: "Primary Obs",
+      startedAt: "2026-09-01T12:30:00.000Z",
+      endedAt: "2026-09-01T12:30:05.000Z",
+      status: "ok",
+      loginMs: 1000,
+      dashboardMs: 200,
+      totalMs: 1200,
+      loggedOut: true,
+      sessionReused: false,
+      balance: 150,
+      consumed: 20,
+      requestCount: 8,
+    });
+
+    // Check Observatory resolution: newer run (150 balance) wins over endpoint (100 balance)
+    const snapsObs = selectUnifiedAccountSnapshots({ store, observatoryStore: obsStore });
+    expect(snapsObs).toHaveLength(1);
+    expect(snapsObs[0].balance).toBe(150);
+    expect(snapsObs[0].consumed).toBe(20);
+
+    // 2. Now Store has an even newer endpoint observation for account-1 (13:00)
+    store.saveEndpointObservation({
+      accountId: "account-1",
+      accountLabel: "Primary Store",
+      observedAt: "2026-09-01T13:00:00.000Z",
+      status: "ok",
+      balance: 175,
+      consumed: 25,
+      requestCount: 12,
+      latencyMs: 15,
+    });
+
+    // 3. Store also has account-legacy (Store-only)
+    store.saveRun(snapshot("2026-09-01T11:00:00.000Z", 50, {
+      accountId: "account-legacy",
+      accountLabel: "Legacy Account",
+    }));
+
+    const snapsUnion = selectUnifiedAccountSnapshots({ store, observatoryStore: obsStore });
+    expect(snapsUnion).toHaveLength(2);
+
+    const acct1 = snapsUnion.find((s) => s.accountId === "account-1")!;
+    expect(acct1.balance).toBe(175);
+    expect(acct1.consumed).toBe(25);
+    expect(acct1.requestCount).toBe(12);
+    expect(acct1.lastObservedAt).toBe("2026-09-01T13:00:00.000Z");
+
+    const legacy = snapsUnion.find((s) => s.accountId === "account-legacy")!;
+    expect(legacy.label).toBe("Legacy Account");
+    expect(legacy.balance).toBe(50);
+
+    store.close();
+    obsStore.close();
+  });
+
+  test("evaluates Budapest product day daily grants with real verified amounts and deduplicates across stores", () => {
+    const store = new Store(":memory:");
+    const obsStore = new ObservatoryStore(":memory:");
+
+    obsStore.upsertAgentRouterAccount({ accountId: "account-1", accountLabel: "Primary" });
+    obsStore.upsertAgentRouterAccount({ accountId: "account-2", accountLabel: "Secondary" });
+
+    // Reference time: 2026-09-01 14:00 UTC = 2026-09-01 16:00 Budapest time
+    const now = new Date("2026-09-01T14:00:00.000Z");
+
+    // Same grant event exists in BOTH ObservatoryStore and legacy Store (sourceEventId: "grant-today-dup")
+    obsStore.recordAgentRouterGrantEvent({
+      runId: 1,
+      accountId: "account-1",
+      sourceEventId: "grant-today-dup",
+      occurredAt: "2026-09-01T08:00:00.000Z",
+      amount: 30.0,
+      classification: "daily-signin",
+    });
+
+    store.saveRun(snapshot("2026-09-01T08:00:00.000Z", 100, {
+      accountId: "account-1",
+      accountLabel: "Primary",
+      summary: {
+        creditGrantEvents: [
+          {
+            sourceEventId: "grant-today-dup",
+            occurredAt: 1_788_249_600, // 2026-09-01T08:00:00.000Z
+            amount: 30.0,
+            classification: "daily-signin",
+            description: "daily signin",
+          },
+        ],
+      },
+    }));
+
+    // Second distinct grant today without sourceEventId (store-specific fallback)
+    obsStore.recordAgentRouterGrantEvent({
+      runId: 2,
+      accountId: "account-1",
+      sourceEventId: "grant-today-extra",
+      occurredAt: "2026-09-01T10:00:00.000Z",
+      amount: 5.0,
+      classification: "daily-signin",
+    });
+
+    // Yesterday's grant for account-2 in Budapest (2026-08-31)
+    obsStore.recordAgentRouterGrantEvent({
+      runId: 3,
+      accountId: "account-2",
+      sourceEventId: "grant-yesterday",
+      occurredAt: "2026-08-31T08:00:00.000Z",
+      amount: 25.0,
+      classification: "daily-signin",
+    });
+
+    const snapshots = selectUnifiedAccountSnapshots({ store, observatoryStore: obsStore }, now);
+    const snap1 = snapshots.find((s) => s.accountId === "account-1")!;
+    const snap2 = snapshots.find((s) => s.accountId === "account-2")!;
+
+    // account-1 has 30 (deduplicated) + 5 = 35
+    expect(snap1.dailyGrantConfirmed).toBe(true);
+    expect(snap1.dailyGrantAmount).toBe(35.0);
+
+    // account-2 yesterday grant -> not confirmed today
+    expect(snap2.dailyGrantConfirmed).toBe(false);
+    expect(snap2.dailyGrantAmount).toBeNull();
+
+    store.close();
+    obsStore.close();
+  });
+
+  test("handles quota usage percentage calculation when remainingFraction is null", async () => {
+    const { store, telegram, appConfig } = await fixture();
+    const notifier = (await TelegramNotifier.create(appConfig, store, telegram.fetcher))!;
+    const obsStore = new ObservatoryStore(":memory:");
+
+    obsStore.upsertIdentity({
+      identityId: "ident-null-rem",
+      kind: "credential",
+      sourceHostId: "node-1",
+      provider: "google-antigravity",
+      label: "Antigravity Pro",
+      observedAt: "2026-09-01T12:00:00.000Z",
+      health: "healthy",
+      disabled: false,
+      blocked: false,
+    });
+    obsStore.recordQuotaObservation({
+      identityId: "ident-null-rem",
+      provider: "google-antigravity",
+      bucketId: "daily",
+      windowId: "w1",
+      usedFraction: 0.65,
+      remainingFraction: undefined,
+      observedAt: "2026-09-01T12:00:00.000Z",
+      status: "ok",
+    });
+
+    const quotasUpdate: TelegramUpdate = {
+      update_id: 1,
+      message: {
+        message_id: 101,
+        chat: { id: "123456789", type: "private" },
+        from: { id: 123456789, is_bot: false, first_name: "Owner", username: "bromoketone" },
+        date: Math.floor(Date.now() / 1000),
+        text: "/quotas",
+      },
+    };
+
+    const outcome = await notifier.processCommandUpdate(quotasUpdate, { store, observatoryStore: obsStore });
+    expect(outcome).toBe("acknowledged");
+
+    const messages = telegram.calls.filter((call) => call.method === "sendMessage");
+    expect(messages).toHaveLength(1);
+    const text = (messages[0].body as { text: string }).text;
+    expect(text).toContain("65%");
+    expect(text).toContain("Google Antigravity");
+    obsStore.close();
+  });
+
+  test("bounds all command outputs to <=4096 chars with HTML-safe pagination", () => {
+    // 1. Huge balances inventory with HTML entity expansions
+    const accounts = Array.from({ length: 80 }, (_, i) => ({
+      label: `Account & Co. ${i + 1} <Tier ${i + 1}> "Special"`,
+      balance: 100.5 + i,
+      consumed: 20.25,
+      requestCount: 1500,
+      status: "ok",
+      lastObservedAt: "2026-09-01T12:00:00.000Z",
+      dailyGrantConfirmed: true,
+      dailyGrantAmount: 25.0,
+    }));
+
+    const balancePages = buildBalancesMessages({
+      accounts,
+      totalBalance: 10_000,
+      totalConsumed: 1_500,
+      dashboardUrl: "https://dashboard.example/observatory/?param=1&param2=2",
+    });
+    expect(balancePages.length).toBeGreaterThan(1);
+    for (const page of balancePages) {
+      expect(page.length).toBeLessThanOrEqual(4_096);
+      expect(page).not.toContain("<Tier"); // properly escaped
+      expect(page).toContain("&amp;");
+    }
+
+    // 2. Huge status inventory
+    const statusPages = buildStatusMessages({
+      agentrouterAccounts: accounts,
+      totalBalance: 10_000,
+      totalConsumed: 1_500,
+      quotasSummary: {
+        totalWindows: 12,
+        warningCount: 1,
+        identitiesCount: 4,
+      },
+      openAiWindows: [
+        {
+          name: "OpenAI Codex Main & Secondary",
+          usedPct: 40,
+          resetsIn: "resets in <1m & 30s>",
+        },
+      ],
+      dashboardUrl: "https://dashboard.example/observatory/",
+    });
+    expect(statusPages.length).toBeGreaterThan(1);
+    for (const page of statusPages) {
+      expect(page.length).toBeLessThanOrEqual(4_096);
+      expect(page).not.toContain("<1m"); // resetsIn properly escaped
+    }
+  });
+
+  test("handles error classification, getUpdates errors, and listener teardown", async () => {
+    const { store, telegram, appConfig } = await fixture();
+    const notifier = (await TelegramNotifier.create(appConfig, store, telegram.fetcher))!;
+
+    // 1. processCommandUpdate returns retryable_failure when sendMessage throws
+    const badUpdate: TelegramUpdate = {
+      update_id: 50,
+      message: {
+        message_id: 201,
+        chat: { id: "123456789", type: "private" },
+        from: { id: 123456789, is_bot: false, first_name: "Owner", username: "bromoketone" },
+        date: Math.floor(Date.now() / 1000),
+        text: "/ping",
+      },
+    };
+
+    // Mock fetcher failure on sendMessage
+    const failingTelegram = {
+      fetcher: async (input: RequestInfo | URL): Promise<Response> => {
+        const url = String(input);
+        if (url.endsWith("sendMessage")) {
+          return new Response(JSON.stringify({ ok: false, description: "Internal Telegram server error" }), {
+            status: 500,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        return new Response(JSON.stringify({ ok: true, result: { id: 123456789, type: "private", username: "bromoketone" } }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      },
+    };
+
+    const failingNotifier = (await TelegramNotifier.create(appConfig, store, failingTelegram.fetcher))!;
+    const failureOutcome = await failingNotifier.processCommandUpdate(badUpdate, { store });
+    expect(failureOutcome).toBe("retryable_failure");
+
+    // 2. getUpdates throws with description on Telegram API rejection
+    const rejectionTelegram = {
+      fetcher: async (input: RequestInfo | URL): Promise<Response> => {
+        const url = String(input);
+        if (url.endsWith("getUpdates")) {
+          return new Response(
+            JSON.stringify({ ok: false, error_code: 409, description: "Conflict: terminated by other getUpdates request" }),
+            { status: 409, headers: { "content-type": "application/json" } },
+          );
+        }
+        return new Response(JSON.stringify({ ok: true, result: { id: 123456789, type: "private", username: "bromoketone" } }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      },
+    };
+    const rejectionNotifier = (await TelegramNotifier.create(appConfig, store, rejectionTelegram.fetcher))!;
+    const rejectionTransport = rejectionNotifier["transport"] as unknown as {
+      getUpdates: (offset: number, timeoutSeconds?: number) => Promise<TelegramUpdate[]>;
+    };
+    await expect(rejectionTransport.getUpdates(0, 1)).rejects.toThrow("Conflict: terminated by other getUpdates request");
+
+    // 3. getUpdates throws descriptive error on invalid JSON
+    const invalidJsonTelegram = {
+      fetcher: async (input: RequestInfo | URL): Promise<Response> => {
+        const url = String(input);
+        if (url.endsWith("getUpdates")) {
+          return new Response("<html>502 Bad Gateway</html>", {
+            status: 502,
+            headers: { "content-type": "text/html" },
+          });
+        }
+        return new Response(JSON.stringify({ ok: true, result: { id: 123456789, type: "private", username: "bromoketone" } }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      },
+    };
+    const invalidJsonNotifier = (await TelegramNotifier.create(appConfig, store, invalidJsonTelegram.fetcher))!;
+    const invalidJsonTransport = invalidJsonNotifier["transport"] as unknown as {
+      getUpdates: (offset: number, timeoutSeconds?: number) => Promise<TelegramUpdate[]>;
+    };
+    await expect(invalidJsonTransport.getUpdates(0, 1)).rejects.toThrow("invalid JSON");
+
+    // 4. startCommandListener teardown aborts cleanly
+    const stopListener = notifier.startCommandListener({ store });
+    await expect(stopListener()).resolves.toBeUndefined();
+  });
+
+  test("responds to unknown commands with capped and escaped text", async () => {
+    const { store, telegram, appConfig } = await fixture();
+    const notifier = (await TelegramNotifier.create(appConfig, store, telegram.fetcher))!;
+
+    const unknownUpdate: TelegramUpdate = {
+      update_id: 1,
+      message: {
+        message_id: 101,
+        chat: { id: "123456789", type: "private" },
+        from: { id: 123456789, is_bot: false, first_name: "Owner", username: "bromoketone" },
+        date: Math.floor(Date.now() / 1000),
+        text: `/unknown_${"<script>".repeat(50)}`,
+      },
+    };
+
+    const outcome = await notifier.processCommandUpdate(unknownUpdate, { store });
+    expect(outcome).toBe("acknowledged");
+
+    const messages = telegram.calls.filter((call) => call.method === "sendMessage");
+    expect(messages).toHaveLength(1);
+    const text = (messages[0].body as { text: string }).text;
+    expect(text).toContain("Unknown command");
+    expect(text).not.toContain("<script>");
+    expect(text).toContain("&lt;script&gt;");
+    expect(text.length).toBeLessThanOrEqual(4_096);
   });
 });

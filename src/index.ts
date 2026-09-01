@@ -193,7 +193,7 @@ async function main(): Promise<void> {
     if (closing) return;
     closing = true;
     coordinator.stopScheduler();
-    stopTelegramCommands?.();
+    await stopTelegramCommands?.();
     collectorServer?.close();
     server.stop(true);
     await retention.close();
