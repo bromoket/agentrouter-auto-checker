@@ -50,8 +50,7 @@ describe("pollAccountEndpoints", () => {
         ? Response.json({ success: true, data: { quota: -115_000, used_quota: 69_975_000 } })
         : Response.json({ success: true, data: { quota_per_unit: 500_000 } });
     }) as unknown as typeof fetch;
-    const noBrowser = async () => { throw new Error("no browser"); };
-    const result = await pollAccountEndpoints(account, await configWithMonitorState(), undefined, noBrowser);
+    const result = await pollAccountEndpoints(account, await configWithMonitorState());
     expect(result.status).toBe("ok");
     expect(result.balance).toBe(-0.23);
     expect(result.consumed).toBe(139.95);
@@ -62,22 +61,8 @@ describe("pollAccountEndpoints", () => {
       status: 403,
       headers: { "content-type": "text/html" },
     })) as unknown as typeof fetch;
-    const noBrowser = async () => { throw new Error("no browser"); };
-    const result = await pollAccountEndpoints(account, await configWithMonitorState(), undefined, noBrowser);
+    const result = await pollAccountEndpoints(account, await configWithMonitorState());
     expect(result.status).toBe("error");
     expect(result.errorMessage).toContain("HTTP 403");
-  });
-
-  it("falls back to browser payload loader when direct fetch returns HTML", async () => {
-    globalThis.fetch = (async () => new Response("<html>WAF</html>", {
-      status: 200,
-      headers: { "content-type": "text/html; charset=utf-8" },
-    })) as unknown as typeof fetch;
-    const browserLoader = async () => ({ success: true, data: { quota: -500_000, used_quota: 100_000_000, quota_per_unit: 500_000 } });
-    const result = await pollAccountEndpoints(account, await configWithMonitorState(), undefined, browserLoader);
-    expect(result.status).toBe("ok");
-    expect(result.balance).toBe(-1);
-    expect(result.consumed).toBe(200);
-    expect(result.sourcePath).toContain(":browser");
   });
 });
