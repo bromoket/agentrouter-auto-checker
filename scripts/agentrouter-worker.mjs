@@ -1388,7 +1388,6 @@ async function logoutAndPersist(context, page, config, userId, statePath, apiCal
       await quit.waitFor({ state: "visible", timeout: 10_000 });
       await quit.click({ timeout: 10_000 });
       await page.waitForURL(/\/login(?:[?#]|$)/, { timeout: 15_000 });
-      redirectedToLogin = new URL(page.url()).pathname === "/login";
     } catch (error) {
       uiError = errorText(error);
     }
