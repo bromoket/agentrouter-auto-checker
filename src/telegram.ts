@@ -3,7 +3,9 @@ import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { buildChartWorkerEnv } from "./child-environment";
 import type { AppConfig, TelegramConfig } from "./config";
+import type { OmpQuotaObservation, OmpQuotaTransitionEvent } from "./omp-quota";
 import type {
   CreditGrantEvent,
   CreditObservation,
@@ -46,7 +48,7 @@ function accountState(state: TelegramState, accountId: string): AccountNotificat
   };
 }
 
-function escapeHtml(value: unknown): string {
+export function escapeHtml(value: unknown): string {
   return String(value)
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
@@ -54,25 +56,25 @@ function escapeHtml(value: unknown): string {
     .replaceAll('"', "&quot;");
 }
 
-function money(value: number | null | undefined, signed = false): string {
+export function money(value: number | null | undefined, signed = false): string {
   if (value === null || value === undefined || !Number.isFinite(value)) return "—";
   const prefix = value < 0 ? "-" : signed && value > 0 ? "+" : "";
   return `${prefix}$${Math.abs(value).toFixed(2)}`;
 }
 
-function signedInteger(value: number): string {
+export function signedInteger(value: number): string {
   if (!Number.isSafeInteger(value)) return "—";
   return `${value > 0 ? "+" : ""}${value.toLocaleString("en-US")}`;
 }
 
-function elapsed(minutes: number | null): string {
+export function elapsed(minutes: number | null): string {
   if (minutes === null || !Number.isFinite(minutes)) return "first verified sample";
   if (minutes < 60) return `${Math.round(minutes)} min`;
   if (minutes < 1_440) return `${(minutes / 60).toFixed(1)} h`;
   return `${(minutes / 1_440).toFixed(1)} d`;
 }
 
-function observedAt(value: string): string {
+export function observedAt(value: string): string {
   return new Intl.DateTimeFormat("en-GB", {
     timeZone: "Europe/Budapest",
     dateStyle: "medium",
@@ -80,7 +82,7 @@ function observedAt(value: string): string {
   }).format(new Date(value));
 }
 
-function compactError(value: string | undefined): string {
+export function compactError(value: string | undefined): string {
   if (!value) return "Unknown account-check failure";
   return value.replace(/\u001B\[[0-9;]*m/g, "").replace(/\s+/g, " ").slice(0, 500);
 }
@@ -174,13 +176,15 @@ class TelegramTransport {
     }
   }
 
-  async sendMessage(html: string): Promise<void> {
-    await this.request("sendMessage", {
+  async sendMessage(html: string): Promise<{ messageId?: string }> {
+    const res = await this.request("sendMessage", {
       chat_id: this.config.chatId,
       text: html,
       parse_mode: "HTML",
       link_preview_options: { is_disabled: true },
     });
+    const msgId = (res.result as { message_id?: number | string } | undefined)?.message_id;
+    return { messageId: msgId ? String(msgId) : undefined };
   }
 
   async sendPhoto(photo: Uint8Array, caption: string): Promise<void> {
@@ -264,6 +268,10 @@ export class TelegramNotifier {
     notifier.state = await notifier.stateStore.load(store.getLatestCreditGrantEventId());
     return notifier;
   }
+  async sendObservatoryMessage(html: string): Promise<{ messageId?: string }> {
+    return await this.transport.sendMessage(html);
+  }
+
 
   async processRun(runId: number, snapshot: RunSnapshot): Promise<void> {
     const state = accountState(this.state, snapshot.accountId);
@@ -636,6 +644,7 @@ export class TelegramNotifier {
       const proc = Bun.spawn({
         cmd: [nodeBinary, CHART_SCRIPT, output],
         cwd: process.cwd(),
+        env: buildChartWorkerEnv(),
         stdin: "pipe",
         stdout: "pipe",
         stderr: "pipe",
@@ -653,6 +662,67 @@ export class TelegramNotifier {
       return new Uint8Array(await readFile(output));
     } finally {
       await rm(directory, { recursive: true, force: true });
+    }
+  }
+
+  async sendOmpQuotaReset(observation: OmpQuotaObservation): Promise<void> {
+    const lines = [
+      "⚡ <b>OMP ChatGPT quota reset</b>",
+      "",
+      `<b>Remaining:</b> ${observation.remainingPct}%`,
+      `<b>Resets at:</b> ${escapeHtml(observedAt(observation.resetAt))}`,
+      `<b>Observed:</b> ${escapeHtml(observedAt(observation.observedAt))}`,
+    ];
+    await this.transport.sendMessage(lines.join("\n"));
+  }
+
+  async sendOmpQuotaLow(observation: OmpQuotaObservation, thresholdPct: number): Promise<void> {
+    const lines = [
+      "⚠️ <b>OMP ChatGPT quota low</b>",
+      "",
+      `<b>Remaining:</b> ${observation.remainingPct}% (threshold: ${thresholdPct}%)`,
+      `<b>Resets at:</b> ${escapeHtml(observedAt(observation.resetAt))}`,
+      `<b>Observed:</b> ${escapeHtml(observedAt(observation.observedAt))}`,
+    ];
+    await this.transport.sendMessage(lines.join("\n"));
+  }
+
+  async sendOmpQuotaFailure(consecutiveFailures: number, errorCategory: string): Promise<void> {
+    const lines = [
+      "🛑 <b>OMP quota monitoring is failing</b>",
+      "",
+      `<b>Consecutive failures:</b> ${consecutiveFailures}`,
+      `<b>Error:</b> ${escapeHtml(errorCategory)}`,
+      `<b>Observed:</b> ${escapeHtml(observedAt(new Date().toISOString()))}`,
+    ];
+    await this.transport.sendMessage(lines.join("\n"));
+  }
+
+  async sendOmpQuotaRecovery(observation: OmpQuotaObservation): Promise<void> {
+    const lines = [
+      "✅ <b>OMP quota monitoring recovered</b>",
+      "",
+      `<b>Remaining:</b> ${observation.remainingPct}%`,
+      `<b>Resets at:</b> ${escapeHtml(observedAt(observation.resetAt))}`,
+      `<b>Observed:</b> ${escapeHtml(observedAt(observation.observedAt))}`,
+    ];
+    await this.transport.sendMessage(lines.join("\n"));
+  }
+
+  async processOmpQuotaTransition(event: OmpQuotaTransitionEvent): Promise<void> {
+    switch (event.type) {
+      case "reset":
+        await this.sendOmpQuotaReset(event.observation);
+        break;
+      case "low_remaining":
+        await this.sendOmpQuotaLow(event.observation, event.thresholdPct);
+        break;
+      case "repeated_failure":
+        await this.sendOmpQuotaFailure(event.consecutiveFailures, event.errorCategory);
+        break;
+      case "recovery":
+        await this.sendOmpQuotaRecovery(event.observation);
+        break;
     }
   }
 }

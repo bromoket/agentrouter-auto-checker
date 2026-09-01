@@ -560,7 +560,7 @@ export class Store {
         updated_at = excluded.updated_at
     `);
     const previousMetric = this.db.prepare(`
-      SELECT id, started_at, metrics
+      SELECT id, ended_at, metrics
       FROM runs
       WHERE account_id = ? AND status = 'ok'
       ORDER BY id DESC
@@ -584,7 +584,7 @@ export class Store {
       const previous = snapshot.status === "ok"
         ? (previousMetric.get(snapshot.accountId) as {
             id: number;
-            started_at: string;
+            ended_at: string;
             metrics: string;
           } | null)
         : null;
@@ -619,7 +619,7 @@ export class Store {
         const balanceDelta = hasPrevious ? balance - previousBalance : null;
         const consumedDelta = hasPrevious ? consumed - previousConsumed : null;
         const minutesSincePrevious = hasPrevious && previous
-          ? Math.max(0, (Date.parse(snapshot.startedAt) - Date.parse(previous.started_at)) / 60_000)
+          ? Math.max(0, (Date.parse(snapshot.endedAt) - Date.parse(previous.ended_at)) / 60_000)
           : null;
         const creditIncrease = (balanceDelta ?? 0) > 0.000_001;
         const usageIncrease = (consumedDelta ?? 0) > 0.000_001 || (balanceDelta ?? 0) < -0.000_001;

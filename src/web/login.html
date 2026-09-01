@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <meta name="theme-color" content="#090311">
+    <title>Sign In · AI Fleet Observatory</title>
+    <link rel="stylesheet" href="./login.css">
+    <script src="./login.js" defer></script>
+  </head>
+  <body>
+    <div class="card">
+      <h1>AI Fleet Observatory</h1>
+      <p class="subtitle">Enter your API key to access the dashboard.</p>
+      <form id="login-form" autocomplete="off">
+        <div class="form-group">
+          <label for="api-key">API Key</label>
+          <input
+            type="password"
+            id="api-key"
+            name="apiKey"
+            required
+            autocomplete="current-password"
+            placeholder="••••••••••••••••••••••••••••••••"
+          />
+        </div>
+        <button type="submit" id="submit-btn">Sign In</button>
+        <div id="error" class="error-msg" role="alert" aria-live="polite"></div>
+      </form>
+    </div>
+  </body>
+</html>

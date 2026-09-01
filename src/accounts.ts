@@ -38,6 +38,7 @@ interface AccountFile {
 
 const USERNAME_PATTERN = /^(?!-)(?!.*--)[A-Za-z0-9-]{1,39}(?<!-)$/;
 const ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+const FORBIDDEN_LABEL_PATTERN = /[\u0000-\u001F\u007F-\u009F\u2028\u2029]|\p{Bidi_Control}/u;
 const MAX_ACCOUNTS = 100;
 
 function asTrimmedString(value: unknown): string {
@@ -56,7 +57,18 @@ function validateStoredAccount(value: unknown, index: number): GitHubAccount {
   const agentRouterApiToken = typeof candidate.agentRouterApiToken === "string"
     ? candidate.agentRouterApiToken.trim()
     : undefined;
-  const label = asTrimmedString(candidate.label) || githubUsername;
+  let label: string;
+  if (typeof candidate.label === "string") {
+    if (FORBIDDEN_LABEL_PATTERN.test(candidate.label)) {
+      throw new Error(`Account ${index + 1} has an invalid label.`);
+    }
+    const trimmed = candidate.label.trim().normalize("NFC");
+    label = trimmed || githubUsername;
+  } else if (candidate.label === undefined || candidate.label === null) {
+    label = githubUsername;
+  } else {
+    throw new Error(`Account ${index + 1} has an invalid label.`);
+  }
   const requestedOrder = Number(candidate.runOrder);
   const runOrder = Number.isSafeInteger(requestedOrder) && requestedOrder >= 0
     ? Math.min(requestedOrder, 10_000)
@@ -230,7 +242,11 @@ export class AccountStore {
     const githubUsername = asTrimmedString(input.githubUsername) || existing?.githubUsername || "";
     const suppliedPassword = typeof input.githubPassword === "string" ? input.githubPassword : "";
     const githubPassword = suppliedPassword || existing?.githubPassword || "";
-    const label = asTrimmedString(input.label) || existing?.label || githubUsername;
+    const rawLabel = input.label !== undefined
+      ? (typeof input.label === "string" && input.label.trim().length === 0 && !FORBIDDEN_LABEL_PATTERN.test(input.label)
+          ? (existing?.label || githubUsername)
+          : input.label)
+      : (existing?.label || githubUsername);
     const id = existing?.id || (requestedId && ID_PATTERN.test(requestedId)
       ? requestedId
       : createId(githubUsername, accounts));
@@ -238,7 +254,7 @@ export class AccountStore {
     const account = validateStoredAccount(
       {
         id,
-        label,
+        label: rawLabel,
         githubUsername,
         githubPassword,
         agentRouterApiToken: existing?.agentRouterApiToken,

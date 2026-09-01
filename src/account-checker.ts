@@ -1,4 +1,5 @@
 import { fileURLToPath } from "node:url";
+import { buildBrowserWorkerEnv } from "./child-environment";
 import type { GitHubAccount } from "./accounts";
 import type {
   AuthenticationChallengeBroker,
@@ -97,6 +98,7 @@ export async function runSingleAccountCheck(
   const proc = Bun.spawn({
     cmd: [nodeBinary, WORKER_PATH],
     cwd: process.cwd(),
+    env: buildBrowserWorkerEnv(),
     stdin: "pipe",
     stdout: "pipe",
     stderr: "pipe",

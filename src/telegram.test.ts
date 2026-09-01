@@ -3,10 +3,10 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AppConfig } from "./config";
+import { createDashboardAuth } from "./dashboard-auth";
 import type { RunSnapshot } from "./storage";
 import { Store } from "./storage";
 import { TelegramNotifier } from "./telegram";
-
 const resources: Array<{ directory: string; store: Store }> = [];
 
 function config(stateFilePath: string, overrides: Partial<AppConfig["telegram"]> = {}): AppConfig {
@@ -27,6 +27,15 @@ function config(stateFilePath: string, overrides: Partial<AppConfig["telegram"]>
     dbPath: ":memory:",
     maxRecentRuns: 500,
     disableWebAuthn: true,
+    ompQuota: {
+      enabled: false,
+      executable: "node_modules/.bin/omp",
+      brokerUrl: null,
+      stateFilePath: "data/omp-quota-state.json",
+      intervalMinutes: 5,
+      timeoutMs: 45_000,
+      lowRemainingPct: 10,
+    },
     telegram: {
       botToken: `12345678:${"A".repeat(40)}`,
       chatId: "123456789",
@@ -39,6 +48,37 @@ function config(stateFilePath: string, overrides: Partial<AppConfig["telegram"]>
       dashboardUrl: "http://100.127.29.78:8456",
       ...overrides,
     },
+    observatory: {
+      enabled: false,
+      dbPath: ":memory:",
+      hmacKey: "a".repeat(32),
+      ompExecutable: "node_modules/.bin/omp",
+      ompVersion: "18.0.11",
+      sourceHostId: "test-node",
+      pollIntervalMinutes: 5,
+      retentionDays: 14,
+      retentionPruneIntervalMinutes: 60,
+      deliveryLeaseDurationMs: 30_000,
+      deliveryMaxRetries: 5,
+      maxAccountsPerProvider: 10,
+      perAccountTimeoutMs: 10_000,
+      ompTimeoutMs: 215_000,
+    },
+    collector: {
+      enabled: false,
+      host: "127.0.0.1",
+      port: 8457,
+      publicOrigin: "https://bkserver.tailbbaa91.ts.net:8457",
+      registryFilePath: null,
+      tailscaleExecutablePath: null,
+      proxyTokenFilePath: null,
+    },
+    dashboardAuth: createDashboardAuth({
+      env: {
+        DASHBOARD_API_KEY: "k".repeat(32),
+      },
+      host: "100.127.29.78",
+    }),
   };
 }
 
@@ -269,5 +309,92 @@ describe("TelegramNotifier", () => {
     expect(messages).toHaveLength(2);
     expect(JSON.stringify(messages[0].body)).toContain("Repeated AgentRouter checks are failing");
     expect(JSON.stringify(messages[1].body)).toContain("monitoring recovered");
+  });
+
+  test("sends OMP quota reset notification", async () => {
+    const { store, telegram, appConfig } = await fixture();
+    const notifier = await TelegramNotifier.create(appConfig, store, telegram.fetcher);
+
+    await notifier!.sendOmpQuotaReset({
+      provider: "openai-codex",
+      usedFraction: 0.1,
+      remainingPct: 90,
+      resetAt: "2026-09-07T12:00:00.000Z",
+      observedAt: "2026-08-31T12:00:00.000Z",
+    });
+
+    const messages = telegram.calls.filter((call) => call.method === "sendMessage");
+    expect(messages).toHaveLength(1);
+    const text = JSON.stringify(messages[0].body);
+    expect(text).toContain("OMP ChatGPT quota reset");
+    expect(text).toContain("90%");
+    expect(text).not.toContain("token");
+    expect(text).not.toContain("broker");
+  });
+
+  test("sends OMP quota low notification with threshold", async () => {
+    const { store, telegram, appConfig } = await fixture();
+    const notifier = await TelegramNotifier.create(appConfig, store, telegram.fetcher);
+
+    await notifier!.sendOmpQuotaLow(
+      {
+        provider: "openai-codex",
+        usedFraction: 0.95,
+        remainingPct: 5,
+        resetAt: "2026-09-07T12:00:00.000Z",
+        observedAt: "2026-08-31T12:00:00.000Z",
+      },
+      10,
+    );
+
+    const messages = telegram.calls.filter((call) => call.method === "sendMessage");
+    expect(messages).toHaveLength(1);
+    const text = JSON.stringify(messages[0].body);
+    expect(text).toContain("OMP ChatGPT quota low");
+    expect(text).toContain("5%");
+    expect(text).toContain("threshold: 10%");
+  });
+
+  test("sends OMP quota failure and recovery notifications", async () => {
+    const { store, telegram, appConfig } = await fixture();
+    const notifier = await TelegramNotifier.create(appConfig, store, telegram.fetcher);
+
+    await notifier!.sendOmpQuotaFailure(3, "Probe timed out");
+    await notifier!.sendOmpQuotaRecovery({
+      provider: "openai-codex",
+      usedFraction: 0.15,
+      remainingPct: 85,
+      resetAt: "2026-09-07T12:00:00.000Z",
+      observedAt: "2026-08-31T12:00:00.000Z",
+    });
+
+    const messages = telegram.calls.filter((call) => call.method === "sendMessage");
+    expect(messages).toHaveLength(2);
+    expect(JSON.stringify(messages[0].body)).toContain("OMP quota monitoring is failing");
+    expect(JSON.stringify(messages[0].body)).toContain("Consecutive failures:</b> 3");
+    expect(JSON.stringify(messages[0].body)).toContain("Probe timed out");
+    expect(JSON.stringify(messages[1].body)).toContain("OMP quota monitoring recovered");
+    expect(JSON.stringify(messages[1].body)).toContain("85%");
+  });
+
+  test("processOmpQuotaTransition routes all transition types", async () => {
+    const { store, telegram, appConfig } = await fixture();
+    const notifier = await TelegramNotifier.create(appConfig, store, telegram.fetcher);
+
+    const obs = {
+      provider: "openai-codex" as const,
+      usedFraction: 0.2,
+      remainingPct: 80,
+      resetAt: "2026-09-07T12:00:00.000Z",
+      observedAt: "2026-08-31T12:00:00.000Z",
+    };
+
+    await notifier!.processOmpQuotaTransition({ type: "reset", observation: obs, previousResetAt: "2026-08-31" });
+    await notifier!.processOmpQuotaTransition({ type: "low_remaining", observation: obs, thresholdPct: 10 });
+    await notifier!.processOmpQuotaTransition({ type: "repeated_failure", consecutiveFailures: 3, errorCategory: "CLI process exited with error" });
+    await notifier!.processOmpQuotaTransition({ type: "recovery", observation: obs, previousFailures: 3 });
+
+    const messages = telegram.calls.filter((call) => call.method === "sendMessage");
+    expect(messages).toHaveLength(4);
   });
 });

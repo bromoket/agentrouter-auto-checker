@@ -8,7 +8,7 @@
     "openDashboardOnStart": false,
     "browserHeadless": true,
     "twoFactorTimeoutMinutes": 10,
-    "captureScreenshots": true,
+    "captureScreenshots": false,
     "activityLookbackDays": 28
   }
 }

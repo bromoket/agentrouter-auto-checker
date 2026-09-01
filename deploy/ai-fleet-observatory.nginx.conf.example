@@ -1,0 +1,24 @@
+# Staging-only nginx TLS proxy for AI Fleet Observatory collector.
+# Install as /etc/nginx/sites-available/ai-fleet-observatory-collector.conf.
+# Keep the token include root-only (0600); never commit its populated contents.
+
+server {
+    listen 100.127.29.78:8457 ssl;
+    server_name bkserver.tailbbaa91.ts.net;
+
+    ssl_certificate /etc/ai-fleet-observatory/tls/__TAILSCALE_CERTIFICATE__.pem;
+    ssl_certificate_key /etc/ai-fleet-observatory/tls/__TAILSCALE_PRIVATE_KEY__.pem;
+
+    # Aggregate request-header cap: 4 x 2 KiB = 8 KiB.
+    large_client_header_buffers 4 2k;
+    client_max_body_size 262144;
+
+    include /etc/nginx/ai-fleet-observatory/proxy-token.conf;
+    location /v1/collector/session-batches {
+        proxy_pass http://127.0.0.1:8457;
+        proxy_set_header X-AFO-Source-IP $remote_addr;
+        proxy_set_header X-AFO-Proxy-Token $afo_proxy_token;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto https;
+    }
+}

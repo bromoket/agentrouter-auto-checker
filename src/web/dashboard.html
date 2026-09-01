@@ -5,34 +5,38 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="dark">
     <meta name="theme-color" content="#090311">
-    <title>AgentRouter Observatory</title>
-    <link rel="stylesheet" href="/dashboard.css">
-    <script src="/vendor/chart.umd.js" defer></script>
-    <script src="/dashboard.js" defer></script>
+    <title>AI Fleet Observatory</title>
+    <link rel="stylesheet" href="./dashboard.css">
+    <script src="./vendor/chart.umd.js" defer></script>
+    <script src="./dashboard.js" defer></script>
   </head>
   <body>
-    <a class="skip-link" href="#main-content">Skip to dashboard content</a>
+    <a class="skip-link" href="#main-content">Skip to observatory content</a>
+    <canvas id="celebration-canvas" class="celebration-canvas" aria-hidden="true"></canvas>
     <div class="ambient ambient-one" aria-hidden="true"></div>
     <div class="ambient ambient-two" aria-hidden="true"></div>
     <div class="noise" aria-hidden="true"></div>
 
     <header class="topbar glass">
-      <button id="brand-home" class="brand" type="button" aria-label="Open all accounts overview">
+      <button id="brand-home" class="brand" type="button" aria-label="Open AI Fleet Observatory Overview">
         <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
         <span>
-          <small>AGENTROUTER</small>
+          <small>AI FLEET</small>
           <strong>Observatory</strong>
         </span>
       </button>
       <div class="topbar-center">
-        <span id="scheduler-state" class="status-chip neutral"><i></i>Loading automation</span>
+        <span id="sse-state" class="status-chip ok" title="Observatory real-time stream status" aria-live="polite"><i></i><span>Live Stream</span></span>
+        <span id="scheduler-state" class="status-chip neutral"><i></i><span>Loading automation</span></span>
         <span id="next-run-label" class="next-run">Calculating next cycle…</span>
       </div>
       <div class="topbar-actions">
-        <button id="stop-all" class="button danger-button hidden" type="button"><span>■</span> Stop</button>
-        <button id="run-all" class="button primary" type="button"><span>▶</span> Run all</button>
-        <button id="open-settings" class="button icon-only" type="button" aria-label="Schedule and settings"><svg class="ui-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M12 15.2a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4Z"/><path d="m19.4 13.5 1.1.9-2 3.4-1.4-.55a7.6 7.6 0 0 1-1.6.9l-.2 1.48h-4l-.2-1.48a7.6 7.6 0 0 1-1.6-.9l-1.4.55-2-3.4 1.1-.9a8.2 8.2 0 0 1 0-1.9l-1.1-.9 2-3.4 1.4.55a7.6 7.6 0 0 1 1.6-.9l.2-1.48h4l.2 1.48a7.6 7.6 0 0 1 1.6.9l1.4-.55 2 3.4-1.1.9a8.2 8.2 0 0 1 0 1.9Z"/></svg></button>
-        <button id="add-account" class="button secondary" type="button"><span>＋</span> Account</button>
+        <button id="preview-celebration-btn" class="button ghost" type="button" title="Preview quota reset celebration" aria-label="Preview quota reset celebration"><span aria-hidden="true">✦</span> <span class="action-label">Celebrate</span></button>
+        <button id="stop-all" class="button danger-button hidden" type="button" aria-label="Stop collection cycle"><span aria-hidden="true">■</span> <span class="action-label">Stop</span></button>
+        <button id="run-all" class="button primary" type="button" aria-label="Run all checks"><span aria-hidden="true">▶</span> <span class="action-label">Run all</span></button>
+        <button id="open-settings" class="button icon-only" type="button" aria-label="Schedule and observatory settings"><svg class="ui-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M12 15.2a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4Z"/><path d="m19.4 13.5 1.1.9-2 3.4-1.4-.55a7.6 7.6 0 0 1-1.6.9l-.2 1.48h-4l-.2-1.48a7.6 7.6 0 0 1-1.6-.9l-1.4.55-2-3.4 1.1-.9a8.2 8.2 0 0 1 0-1.9l-1.1-.9 2-3.4 1.4.55a7.6 7.6 0 0 1 1.6-.9l.2-1.48h4l.2 1.48a7.6 7.6 0 0 1 1.6.9l1.4-.55 2 3.4-1.1.9a8.2 8.2 0 0 1 0 1.9Z"/></svg></button>
+        <button id="add-account" class="button secondary" type="button" aria-label="Add account"><span aria-hidden="true">＋</span> <span class="action-label">Account</span></button>
+        <button id="logout-btn" class="button ghost" type="button" title="Sign out" aria-label="Sign out"><span aria-hidden="true">⎋</span> <span class="action-label">Sign out</span></button>
       </div>
     </header>
 
@@ -57,7 +61,7 @@
       <div id="terminal-events" class="terminal-events" role="log" aria-label="Collection events"></div>
     </section>
 
-    <section id="mobile-challenge" class="challenge-backdrop hidden" aria-live="assertive">
+    <section id="mobile-challenge" class="challenge-backdrop hidden" aria-live="assertive" role="dialog" aria-modal="true" aria-labelledby="challenge-account">
       <article class="challenge-card">
         <div class="challenge-rings" aria-hidden="true"><i></i><i></i><i></i></div>
         <p id="challenge-eyebrow" class="eyebrow">GITHUB MOBILE · SECURE APPROVAL</p>
@@ -71,72 +75,135 @@
     </section>
 
     <main id="main-content" class="app-shell" tabindex="-1">
-      <aside class="rail glass">
+      <aside class="rail glass" aria-label="Observatory Navigation">
         <div class="rail-heading">
-          <span>WORKSPACES</span>
+          <span>FLEET OBSERVATORY</span>
+        </div>
+        <nav class="views-nav" aria-label="Observatory views">
+          <button id="overview-nav" class="nav-card active" type="button" data-view="overview" aria-label="Overview command center" aria-current="page">
+            <span class="nav-icon spectrum">◈</span>
+            <span><strong>Overview</strong><small>Fleet & command center</small></span>
+            <b id="overview-health" class="health-dot neutral" aria-hidden="true"></b>
+          </button>
+          <button id="nav-quotas" class="nav-card" type="button" data-view="quotas" aria-label="Provider Quotas view">
+            <span class="nav-icon">Q</span>
+            <span><strong>Provider Quotas</strong><small>Utilization & limits</small></span>
+            <b id="quotas-health" class="health-dot neutral" aria-hidden="true"></b>
+          </button>
+          <button id="nav-credentials" class="nav-card" type="button" data-view="credentials" aria-label="Provider Credentials view">
+            <span class="nav-icon">ID</span>
+            <span><strong>Credentials</strong><small>Identities & health</small></span>
+            <b id="credentials-health" class="health-dot neutral" aria-hidden="true"></b>
+          </button>
+          <button id="nav-accounts" class="nav-card" type="button" data-view="accounts" aria-label="AgentRouter Accounts view">
+            <span class="nav-icon">AR</span>
+            <span><strong>AgentRouter</strong><small>Accounts & balances</small></span>
+            <b id="accounts-health" class="health-dot neutral" aria-hidden="true"></b>
+          </button>
+          <button id="nav-sessions" class="nav-card" type="button" data-view="sessions" aria-label="OMP Sessions view">
+            <span class="nav-icon">S</span>
+            <span><strong>OMP Sessions</strong><small>Execution telemetry</small></span>
+            <b id="sessions-health" class="health-dot neutral" aria-hidden="true"></b>
+          </button>
+          <button id="nav-hosts" class="nav-card" type="button" data-view="hosts" aria-label="Fleet Hosts view">
+            <span class="nav-icon">H</span>
+            <span><strong>Fleet Hosts</strong><small>Connected agents</small></span>
+            <b id="hosts-health" class="health-dot neutral" aria-hidden="true"></b>
+          </button>
+          <button id="nav-notifications" class="nav-card" type="button" data-view="notifications" aria-label="Notifications view">
+            <span class="nav-icon">N</span>
+            <span><strong>Notifications</strong><small>Policies & routing</small></span>
+            <b id="notifications-health" class="health-dot neutral" aria-hidden="true"></b>
+          </button>
+          <button id="nav-events" class="nav-card" type="button" data-view="events" aria-label="Events and audit view">
+            <span class="nav-icon">E</span>
+            <span><strong>Events / Audit</strong><small>Audit trail & alerts</small></span>
+            <b id="events-health" class="health-dot neutral" aria-hidden="true"></b>
+          </button>
+          <button id="nav-health" class="nav-card" type="button" data-view="health" aria-label="System Health view">
+            <span class="nav-icon">♥</span>
+            <span><strong>System Health</strong><small>Observatory status</small></span>
+            <b id="health-health" class="health-dot neutral" aria-hidden="true"></b>
+          </button>
+        </nav>
+
+        <div class="rail-heading rail-subheading">
+          <span>AGENTROUTER ACCOUNTS</span>
           <button id="rail-add" class="mini-button" type="button" aria-label="Add account">＋</button>
         </div>
-        <button id="overview-nav" class="nav-card active" type="button">
-          <span class="nav-icon spectrum">◈</span>
-          <span><strong>All accounts</strong><small>Unified command center</small></span>
-          <b id="overview-health" class="health-dot neutral"></b>
-        </button>
-        <div id="account-list" class="account-list"></div>
+        <div id="account-list" class="account-list" role="list" aria-label="Configured AgentRouter accounts"></div>
         <div id="onboarding" class="onboarding hidden">
           <span class="onboarding-icon">＋</span>
           <strong>Add your first account</strong>
           <p>Credentials stay in the protected local file and never enter the browser UI again.</p>
           <button id="onboarding-add" class="button primary" type="button">Configure account</button>
         </div>
+
         <div class="rail-footer">
           <div><span>Schedule</span><strong id="schedule-label">Loading…</strong></div>
-          <div><span>Credential vault</span><code id="account-file">data/accounts.json</code></div>
+          <div><span>Credential vault</span><code id="account-file">Protected local vault</code></div>
         </div>
       </aside>
 
       <section class="workspace">
-        <div id="overview-view">
+        <!-- VIEW 1: OVERVIEW -->
+        <div id="overview-view" class="view-panel">
           <section class="hero glass animated-border">
             <div class="hero-copy">
-              <p class="eyebrow">UNIFIED INTELLIGENCE</p>
-              <h1>Every account.<br><span>One living signal.</span></h1>
-              <p>Balances, spend, usage, grants, and automation health—merged without losing account-level detail.</p>
+              <p class="eyebrow">AI FLEET OBSERVATORY</p>
+              <h1>Fleet Intelligence.<br><span>One living signal.</span></h1>
+              <p>Unified telemetry across AI provider quotas, host agents, active sessions, notification routing, and AgentRouter portfolio balances.</p>
               <div class="hero-actions">
                 <button id="hero-run" class="button primary large" type="button">Run collection cycle <span>↗</span></button>
                 <button id="hero-settings" class="button ghost large" type="button">Tune schedule</button>
               </div>
             </div>
             <div class="hero-visual" aria-hidden="true">
-              <div class="core"><span>AR</span></div>
+              <div class="core"><span>AFO</span></div>
               <div class="orbit orbit-a"><i></i></div>
               <div class="orbit orbit-b"><i></i></div>
               <div class="orbit orbit-c"><i></i></div>
             </div>
           </section>
 
+          <section id="observatory-summary-metrics" class="metric-grid"></section>
           <section id="overview-metrics" class="metric-grid overview-metrics"></section>
 
           <section class="dashboard-grid">
             <article class="panel glass chart-panel span-8">
               <header class="panel-heading">
-                <div><p class="eyebrow">PORTFOLIO PULSE</p><h2>Combined balance & spend</h2><p>Click any point to inspect its exact snapshot.</p></div>
+                <div>
+                  <p class="eyebrow">PORTFOLIO PULSE</p>
+                  <h2>Combined balance & spend</h2>
+                  <p>Click any point to inspect its exact snapshot.</p>
+                </div>
                 <span class="live-pill"><i></i> Interactive</span>
               </header>
               <div class="chart-wrap chart-tall"><canvas id="overview-money-chart"></canvas></div>
             </article>
+
             <article class="panel glass chart-panel span-4">
               <header class="panel-heading">
-                <div><p class="eyebrow">CREDIT INTELLIGENCE</p><h2>Confirmed grants</h2><p>AgentRouter system events, with balance deltas as supporting evidence.</p></div>
+                <div>
+                  <p class="eyebrow">CREDIT INTELLIGENCE</p>
+                  <h2>Confirmed grants</h2>
+                  <p>AgentRouter system events, with balance deltas as supporting evidence.</p>
+                </div>
               </header>
-              <div class="earnings-hero"><strong id="overview-earnings">$0.00</strong><span>confirmed grants · <b id="overview-observed-earnings">$0.00 observed balance increases</b></span></div>
+              <div class="earnings-hero">
+                <strong id="overview-earnings">$0.00</strong>
+                <span>confirmed grants · <b id="overview-observed-earnings">$0.00 observed balance increases</b></span>
+              </div>
               <div class="chart-wrap chart-compact"><canvas id="overview-earnings-chart"></canvas></div>
             </article>
+
             <article class="panel glass chart-panel span-7">
               <header class="panel-heading">
                 <div><p class="eyebrow">ACCOUNT MATRIX</p><h2>Balance comparison</h2></div>
               </header>
               <div class="chart-wrap"><canvas id="overview-accounts-chart"></canvas></div>
             </article>
+
             <article class="panel glass span-5">
               <header class="panel-heading">
                 <div><p class="eyebrow">AUTOMATION HEALTH</p><h2>Run reliability</h2></div>
@@ -144,9 +211,14 @@
               <div id="health-summary" class="health-summary"></div>
               <div id="account-comparison" class="account-comparison"></div>
             </article>
+
             <article class="panel glass key-vault span-12">
               <header class="panel-heading">
-                <div><p class="eyebrow">PRIVATE API VAULT</p><h2>Captured API access</h2><p>Tokens remain concealed until you deliberately reveal or copy one.</p></div>
+                <div>
+                  <p class="eyebrow">PRIVATE API VAULT</p>
+                  <h2>Captured API access</h2>
+                  <p>Tokens remain concealed until you deliberately reveal or copy one.</p>
+                </div>
                 <span class="vault-note">Private dashboard only</span>
               </header>
               <div id="overview-token-list" class="overview-token-list"></div>
@@ -154,10 +226,109 @@
           </section>
         </div>
 
+        <!-- VIEW 2: PROVIDER QUOTAS -->
+        <div id="quotas-view" class="view-panel hidden">
+          <section class="view-header glass">
+            <div>
+              <p class="eyebrow">RESOURCE ALLOCATION</p>
+              <h1>Provider Quotas</h1>
+              <p class="muted">Live utilization windows, token/request limits, and confirmed quota reset tracking across AI providers.</p>
+            </div>
+            <div class="view-actions">
+              <button id="refresh-quotas-btn" class="button ghost" type="button">↻ Refresh quotas</button>
+            </div>
+          </section>
+
+          <section id="quotas-summary-metrics" class="metric-grid"></section>
+
+          <section class="panel glass">
+            <header class="panel-heading">
+              <div>
+                <p class="eyebrow">QUOTA WINDOWS</p>
+                <h2>Active Utilization Meters</h2>
+                <p>Tracked against provider rate-limits, daily allowances, and scheduled resets.</p>
+              </div>
+              <div class="filter-group">
+                <select id="quota-provider-filter" aria-label="Filter by provider">
+                  <option value="all">All providers</option>
+                  <option value="openai">OpenAI</option>
+                  <option value="anthropic">Anthropic</option>
+                  <option value="google">Google</option>
+                  <option value="github-copilot">GitHub Copilot</option>
+                  <option value="agentrouter">AgentRouter</option>
+                </select>
+                <select id="quota-status-filter" aria-label="Filter by quota status">
+                  <option value="all">All statuses</option>
+                  <option value="ok">Normal (&lt;80%)</option>
+                  <option value="warning">Warning (80-95%)</option>
+                  <option value="critical">Critical (&gt;95%)</option>
+                  <option value="exhausted">Exhausted</option>
+                </select>
+              </div>
+            </header>
+            <div id="quotas-container" class="quotas-grid"></div>
+          </section>
+        </div>
+
+        <!-- VIEW 3: PROVIDER CREDENTIALS -->
+        <div id="credentials-view" class="view-panel hidden">
+          <section class="view-header glass">
+            <div>
+              <p class="eyebrow">IDENTITY MANAGEMENT</p>
+              <h1>Provider Credentials</h1>
+              <p class="muted">Fleet provider identities, health status, consecutive failures, and active model bindings.</p>
+            </div>
+            <div class="view-actions">
+              <button id="refresh-credentials-btn" class="button ghost" type="button">↻ Refresh identities</button>
+            </div>
+          </section>
+
+          <section id="credentials-summary-metrics" class="metric-grid"></section>
+
+          <section class="panel glass">
+            <header class="panel-heading">
+              <div>
+                <p class="eyebrow">IDENTITY ROSTER</p>
+                <h2>Configured Provider Identities</h2>
+                <p>Identities remain secured in local vaults. Metadata and health are observed live.</p>
+              </div>
+              <div class="filter-group">
+                <select id="credential-health-filter" aria-label="Filter by health">
+                  <option value="all">All health statuses</option>
+                  <option value="healthy">Healthy</option>
+                  <option value="degraded">Degraded</option>
+                  <option value="rate_limited">Rate Limited</option>
+                  <option value="exhausted">Exhausted</option>
+                  <option value="unhealthy">Unhealthy</option>
+                </select>
+              </div>
+            </header>
+            <div id="credentials-container" class="credentials-grid"></div>
+          </section>
+        </div>
+
+        <!-- VIEW 4: AGENTROUTER ACCOUNTS -->
+        <div id="accounts-view" class="view-panel hidden">
+          <div id="accounts-overview-panel">
+            <section class="view-header glass">
+              <div>
+                <p class="eyebrow">PORTFOLIO WORKSPACE</p>
+                <h1>AgentRouter Accounts</h1>
+                <p class="muted">Automated collection cycles, balance histories, and token capture across configured accounts.</p>
+              </div>
+              <div class="view-actions">
+                <button id="accounts-add-btn" class="button primary" type="button">＋ Add account</button>
+              </div>
+            </section>
+            <div id="accounts-roster-cards" class="accounts-roster-grid"></div>
+          </div>
+        </div>
+
+        <!-- ACCOUNT VIEW DETAIL (Preserved for single account deep-dive) -->
         <div id="account-view" class="hidden">
           <section class="account-hero glass animated-border">
             <div>
-              <button id="back-overview" class="back-link" type="button">← All accounts</button>
+              <button id="back-overview" class="back-link" type="button">← Back to Overview</button>
               <p id="selected-username" class="eyebrow"></p>
               <h1 id="selected-label">Account</h1>
               <p id="selected-last-run" class="muted"></p>
@@ -247,9 +418,283 @@
           </section>
         </div>
 
+        <!-- VIEW 5: OMP SESSIONS -->
+        <div id="sessions-view" class="view-panel hidden">
+          <section class="view-header glass">
+            <div>
+              <p class="eyebrow">EXECUTION TELEMETRY</p>
+              <h1>OMP Sessions</h1>
+              <p class="muted">Live agent sessions, token volume, execution latencies, and tool invocation tracking.</p>
+            </div>
+            <div class="view-actions">
+              <button id="refresh-sessions-btn" class="button ghost" type="button">↻ Refresh sessions</button>
+            </div>
+          </section>
+
+          <section id="sessions-summary-metrics" class="metric-grid"></section>
+
+          <section class="panel glass">
+            <header class="panel-heading">
+              <div>
+                <p class="eyebrow">SESSION LOG</p>
+                <h2>Recent Agent Sessions</h2>
+              </div>
+              <div class="filter-group">
+                <select id="session-status-filter" aria-label="Filter by session status">
+                  <option value="all">All statuses</option>
+                  <option value="active">Active</option>
+                  <option value="completed">Completed</option>
+                  <option value="failed">Failed</option>
+                  <option value="cancelled">Cancelled</option>
+                </select>
+              </div>
+            </header>
+            <div class="table-scroll">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Session</th>
+                    <th>Host</th>
+                    <th>Identity</th>
+                    <th>Status</th>
+                    <th>Started</th>
+                    <th>Duration</th>
+                    <th>Tokens</th>
+                    <th>Tools</th>
+                    <th>Errors</th>
+                    <th>Cost</th>
+                    <th>Metadata</th>
+                  </tr>
+                </thead>
+                <tbody id="sessions-body"></tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+
+        <!-- VIEW 6: FLEET HOSTS -->
+        <div id="hosts-view" class="view-panel hidden">
+          <section class="view-header glass">
+            <div>
+              <p class="eyebrow">INFRASTRUCTURE</p>
+              <h1>Fleet Hosts</h1>
+              <p class="muted">Distributed host runners, agent versions, active worker pools, and heartbeat telemetry.</p>
+            </div>
+            <div class="view-actions">
+              <button id="refresh-hosts-btn" class="button ghost" type="button">↻ Refresh hosts</button>
+            </div>
+          </section>
+
+          <section id="hosts-summary-metrics" class="metric-grid"></section>
+
+          <section class="panel glass">
+            <header class="panel-heading">
+              <div>
+                <p class="eyebrow">HOST ROSTER</p>
+                <h2>Connected Fleet Hosts</h2>
+              </div>
+              <div class="filter-group">
+                <select id="host-status-filter" aria-label="Filter by host status">
+                  <option value="all">All host statuses</option>
+                  <option value="online">Online</option>
+                  <option value="degraded">Degraded</option>
+                  <option value="offline">Offline</option>
+                </select>
+              </div>
+            </header>
+            <div id="hosts-container" class="hosts-grid"></div>
+          </section>
+        </div>
+
+        <!-- VIEW 7: NOTIFICATIONS & POLICIES -->
+        <div id="notifications-view" class="view-panel hidden">
+          <section class="view-header glass">
+            <div>
+              <p class="eyebrow">ROUTING & RULES</p>
+              <h1>Notification Policies</h1>
+              <p class="muted">Hierarchical notification rules, threshold alerts, quiet hours, and effective policy calculation.</p>
+            </div>
+            <div class="view-actions">
+              <button id="open-policy-editor-btn" class="button primary" type="button">＋ New policy rule</button>
+            </div>
+          </section>
+
+          <section class="dashboard-grid">
+            <article class="panel glass span-7">
+              <header class="panel-heading">
+                <div>
+                  <p class="eyebrow">POLICY ENGINE</p>
+                  <h2>Configured Policy Hierarchy</h2>
+                  <p>Precedence: Global → Provider → Credential → Identity → Account → Host → Session</p>
+                </div>
+              </header>
+              <div id="policies-list" class="policies-list"></div>
+            </article>
+
+            <article class="panel glass span-5">
+              <header class="panel-heading">
+                <div>
+                  <p class="eyebrow">EFFECTIVE PREVIEW</p>
+                  <h2>Inherited Policy Inspector</h2>
+                  <p>Inspect resolved settings with inheritance overrides.</p>
+                </div>
+              </header>
+              <div class="field-grid policy-preview-selector">
+                <label>Inspect Target Scope
+                  <select id="policy-preview-scope" aria-label="Policy preview scope">
+                    <option value="global">Global Default</option>
+                    <option value="provider:openai">Provider: OpenAI</option>
+                    <option value="provider:anthropic">Provider: Anthropic</option>
+                    <option value="provider:google">Provider: Google</option>
+                    <option value="provider:agentrouter">Provider: AgentRouter</option>
+                  </select>
+                </label>
+              </div>
+              <div id="effective-policy-preview" class="effective-preview-card"></div>
+            </article>
+
+            <article class="panel glass span-12">
+              <header class="panel-heading">
+                <div>
+                  <p class="eyebrow">DELIVERY AUDIT</p>
+                  <h2>Recent Alert Deliveries</h2>
+                  <p>Channel dispatch log across Telegram, Slack, Webhooks, and Email.</p>
+                </div>
+              </header>
+              <div class="table-scroll">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Event ID</th>
+                      <th>Channel</th>
+                      <th>Status</th>
+                      <th>Attempts</th>
+                      <th>Dispatched At</th>
+                      <th>Details</th>
+                    </tr>
+                  </thead>
+                  <tbody id="deliveries-body"></tbody>
+                </table>
+              </div>
+            </article>
+          </section>
+        </div>
+
+        <!-- VIEW 8: EVENTS & AUDIT -->
+        <div id="events-view" class="view-panel hidden">
+          <section class="view-header glass">
+            <div>
+              <p class="eyebrow">SYSTEM RECORD</p>
+              <h1>Events & Audit Trail</h1>
+              <p class="muted">System-wide event streams, quota exhaustion warnings, degradation recoveries, and administrative audit entries.</p>
+            </div>
+            <div class="view-actions">
+              <button id="refresh-events-btn" class="button ghost" type="button">↻ Refresh feed</button>
+            </div>
+          </section>
+
+          <section class="data-tabs panel glass">
+            <div class="tab-list" role="tablist">
+              <button class="data-tab active" data-tab="events" type="button" role="tab" aria-selected="true" aria-controls="events-tab">Observatory Events</button>
+              <button class="data-tab" data-tab="audit" type="button" role="tab" aria-selected="false" aria-controls="audit-tab">Audit Trail</button>
+            </div>
+
+            <div id="events-tab" class="tab-panel" role="tabpanel">
+              <div class="panel-heading">
+                <div class="filter-group">
+                  <select id="event-severity-filter" aria-label="Filter events by severity">
+                    <option value="all">All severities</option>
+                    <option value="critical">Critical</option>
+                    <option value="error">Error</option>
+                    <option value="warning">Warning</option>
+                    <option value="info">Info</option>
+                  </select>
+                </div>
+              </div>
+              <div class="table-scroll">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Occurred</th>
+                      <th>Severity</th>
+                      <th>Event Type</th>
+                      <th>Source / Host</th>
+                      <th>Title & Message</th>
+                      <th>Fingerprint</th>
+                    </tr>
+                  </thead>
+                  <tbody id="events-body"></tbody>
+                </table>
+              </div>
+            </div>
+
+            <div id="audit-tab" class="tab-panel hidden" role="tabpanel">
+              <div class="table-scroll">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Time</th>
+                      <th>Actor</th>
+                      <th>Action</th>
+                      <th>Target Type</th>
+                      <th>Target ID</th>
+                      <th>Details</th>
+                    </tr>
+                  </thead>
+                  <tbody id="audit-body"></tbody>
+                </table>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <!-- VIEW 9: SYSTEM HEALTH -->
+        <div id="health-view" class="view-panel hidden">
+          <section class="view-header glass">
+            <div>
+              <p class="eyebrow">DIAGNOSTICS & TELEMETRY</p>
+              <h1>System Health</h1>
+              <p class="muted">Observatory subsystem readiness, database metrics, SSE streaming state, and retention status.</p>
+            </div>
+            <div class="view-actions">
+              <button id="refresh-health-btn" class="button primary" type="button">Run diagnostic check</button>
+            </div>
+          </section>
+
+          <section id="health-summary-metrics" class="metric-grid"></section>
+
+          <section class="dashboard-grid">
+            <article class="panel glass span-6">
+              <header class="panel-heading">
+                <div><p class="eyebrow">CORE SERVICES</p><h2>Subsystem Status</h2></div>
+              </header>
+              <div id="services-health-container" class="services-health-grid"></div>
+            </article>
+
+            <article class="panel glass span-6">
+              <header class="panel-heading">
+                <div><p class="eyebrow">STREAM & POLLING</p><h2>Connection Telemetry</h2></div>
+              </header>
+              <div id="stream-telemetry-container" class="telemetry-info"></div>
+            </article>
+
+            <article class="panel glass span-12">
+              <header class="panel-heading">
+                <div><p class="eyebrow">DATA STORAGE</p><h2>Database & Retention Telemetry</h2></div>
+              </header>
+              <div id="storage-telemetry-container" class="storage-info"></div>
+            </article>
+          </section>
+        </div>
+
+        <!-- SHARED TRACE ARCHIVE FEED -->
         <section id="trace-archive" class="trace-archive panel glass">
           <header class="panel-heading">
-            <div><p class="eyebrow">SIGNAL ARCHIVE</p><h2>Actionable account events</h2><p>Routine samples remain in charts and exports. This feed keeps material balance movements, confirmed grants, and failures.</p></div>
+            <div>
+              <p class="eyebrow">SIGNAL ARCHIVE</p>
+              <h2>Actionable account events</h2>
+              <p>Routine samples remain in charts and exports. This feed keeps material balance movements, confirmed grants, and failures.</p>
+            </div>
             <span id="trace-archive-state" class="vault-note">Loading record</span>
           </header>
           <div id="trace-archive-list" class="trace-archive-list" role="log" aria-label="Recent collection history"></div>
@@ -257,40 +702,119 @@
       </section>
     </main>
 
-    <aside id="data-inspector" class="data-inspector hidden" aria-live="polite">
+    <aside id="data-inspector" class="data-inspector hidden" aria-live="polite" aria-label="Data Point Snapshot Inspector">
       <button id="close-inspector" class="icon-button" type="button" aria-label="Close inspector">×</button>
-      <p class="eyebrow">PINNED DATA POINT</p><h2 id="inspector-title">Snapshot</h2><div id="inspector-content"></div>
+      <p class="eyebrow">PINNED DATA POINT</p>
+      <h2 id="inspector-title">Snapshot</h2>
+      <div id="inspector-content"></div>
     </aside>
 
-    <dialog id="account-dialog">
+    <!-- ACCOUNT DIALOG -->
+    <dialog id="account-dialog" aria-modal="true" aria-labelledby="dialog-title">
       <form id="account-form" method="dialog">
-        <div class="dialog-heading"><div><p class="eyebrow">LOCAL CREDENTIAL VAULT</p><h2 id="dialog-title">Add account</h2></div><button id="close-dialog" class="icon-button" type="button" aria-label="Close">×</button></div>
+        <div class="dialog-heading">
+          <div>
+            <p class="eyebrow">LOCAL CREDENTIAL VAULT</p>
+            <h2 id="dialog-title">Add account</h2>
+          </div>
+          <button id="close-dialog" class="icon-button" type="button" aria-label="Close dialog">×</button>
+        </div>
         <input id="account-id" type="hidden">
         <div class="field-grid">
-          <label>GitHub username<input id="github-username" name="githubUsername" autocomplete="username" spellcheck="false" required maxlength="39" pattern="[A-Za-z0-9-]+"></label>
-          <label>Display label<input id="account-label" name="label" maxlength="80" placeholder="Defaults to username"></label>
+          <label>GitHub username
+            <input id="github-username" name="githubUsername" autocomplete="username" spellcheck="false" required maxlength="39" pattern="[A-Za-z0-9-]+">
+          </label>
+          <label>Display label
+            <input id="account-label" name="label" maxlength="80" placeholder="Defaults to username">
+          </label>
         </div>
-        <label>GitHub password<input id="github-password" name="githubPassword" type="password" autocomplete="current-password" maxlength="512"><small id="password-help">Required for a new account.</small></label>
-        <div class="info-callout"><strong>Automatic API access</strong><p>The next successful browser cycle captures an active AgentRouter API token and starts read-only minute polling. Tokens stay in the protected credential file.</p></div>
+        <label>GitHub password
+          <input id="github-password" name="githubPassword" type="password" autocomplete="current-password" maxlength="512">
+          <small id="password-help">Required for a new account.</small>
+        </label>
+        <div class="info-callout">
+          <strong>Automatic API access</strong>
+          <p>The next successful browser cycle captures an active AgentRouter API token and starts read-only minute polling. Tokens stay in the protected credential file.</p>
+        </div>
         <div class="field-grid">
-          <label>Run order<input id="account-run-order" name="runOrder" type="number" min="0" max="10000" step="1" value="0"></label>
-          <label class="switch-row"><input id="account-enabled" name="enabled" type="checkbox" checked><span class="switch"></span><span>Scheduled checks enabled</span></label>
+          <label>Run order
+            <input id="account-run-order" name="runOrder" type="number" min="0" max="10000" step="1" value="0">
+          </label>
+          <label class="switch-row">
+            <input id="account-enabled" name="enabled" type="checkbox" checked>
+            <span class="switch"></span>
+            <span>Scheduled checks enabled</span>
+          </label>
         </div>
         <p id="form-error" class="form-error" role="alert"></p>
-        <div class="dialog-actions"><button id="cancel-dialog" class="button ghost" type="button">Cancel</button><button class="button primary" type="submit">Save account</button></div>
+        <div class="dialog-actions">
+          <button id="cancel-dialog" class="button ghost" type="button">Cancel</button>
+          <button class="button primary" type="submit">Save account</button>
+        </div>
       </form>
     </dialog>
 
-    <dialog id="settings-dialog">
+    <!-- SETTINGS DIALOG -->
+    <dialog id="settings-dialog" aria-modal="true" aria-labelledby="settings-dialog-title">
       <form id="settings-form" method="dialog">
-        <div class="dialog-heading"><div><p class="eyebrow">AUTOMATION ENGINE</p><h2>Schedule & collection</h2></div><button id="close-settings" class="icon-button" type="button" aria-label="Close">×</button></div>
-        <div class="field-grid">
-          <label>Cycle interval <span>minutes</span><input id="interval-minutes" type="number" min="5" max="10080" step="1" required></label>
-          <label>Endpoint poll interval <span>minutes</span><input id="endpoint-poll-interval" type="number" min="1" max="1440" step="1" required></label>
-          <label>Account gap <span>seconds</span><input id="account-delay-seconds" type="number" min="0" max="3600" step="1" required></label>
-          <label>Mobile approval timeout <span>minutes</span><input id="two-factor-timeout" type="number" min="1" max="30" step="1" required></label>
-          <label>Activity lookback <span>days</span><input id="activity-lookback" type="number" min="1" max="28" step="1" required></label>
+        <div class="dialog-heading">
+          <div>
+            <p class="eyebrow">AUTOMATION & OBSERVATORY</p>
+            <h2 id="settings-dialog-title">Schedule & celebration</h2>
+          </div>
+          <button id="close-settings" class="icon-button" type="button" aria-label="Close settings">×</button>
         </div>
+        <div class="field-grid">
+          <label>Cycle interval <span>minutes</span>
+            <input id="interval-minutes" type="number" min="5" max="10080" step="1" required>
+          </label>
+          <label>Endpoint poll interval <span>minutes</span>
+            <input id="endpoint-poll-interval" type="number" min="1" max="1440" step="1" required>
+          </label>
+          <label>Account gap <span>seconds</span>
+            <input id="account-delay-seconds" type="number" min="0" max="3600" step="1" required>
+          </label>
+          <label>Mobile approval timeout <span>minutes</span>
+            <input id="two-factor-timeout" type="number" min="1" max="30" step="1" required>
+          </label>
+          <label>Activity lookback <span>days</span>
+            <input id="activity-lookback" type="number" min="1" max="28" step="1" required>
+          </label>
+        </div>
+
+        <div class="settings-section">
+          <p class="eyebrow">CONFIRMED-RESET CELEBRATION</p>
+          <div class="field-grid">
+            <label>Celebration Animation
+              <select id="celebration-effect" aria-label="Celebration effect">
+                <option value="fireworks" selected>Fireworks (Aerial bursts)</option>
+                <option value="confetti">Confetti (Flutter ribbons)</option>
+                <option value="aurora">Aurora (Luminous waves)</option>
+                <option value="spark">Spark (Radial sparkles)</option>
+                <option value="random">Random Effect</option>
+                <option value="off">Off (Disabled)</option>
+              </select>
+            </label>
+            <label>Duration
+              <select id="celebration-duration" aria-label="Celebration duration">
+                <option value="short" selected>Short (2s)</option>
+                <option value="medium">Medium (4s)</option>
+                <option value="long">Long (6s)</option>
+              </select>
+            </label>
+            <label>Intensity
+              <select id="celebration-intensity" aria-label="Celebration intensity">
+                <option value="low" selected>Low (Gentle, default)</option>
+                <option value="medium">Medium</option>
+                <option value="high">High</option>
+              </select>
+            </label>
+            <div class="celebration-preview-cell">
+              <button id="test-celebration" class="button secondary" type="button">✦ Preview effect</button>
+            </div>
+          </div>
+        </div>
+
         <div class="switch-grid">
           <label class="switch-row"><input id="scheduler-enabled" type="checkbox"><span class="switch"></span><span>Scheduled cycles</span></label>
           <label class="switch-row"><input id="endpoint-polling-enabled" type="checkbox"><span class="switch"></span><span>Read-only endpoint polling</span></label>
@@ -298,9 +822,96 @@
           <label class="switch-row"><input id="open-on-start" type="checkbox"><span class="switch"></span><span>Open dashboard on startup</span></label>
           <label class="switch-row"><input id="capture-screenshots" type="checkbox"><span class="switch"></span><span>Capture screenshots</span></label>
         </div>
-        <div class="info-callout"><strong>Two independent schedules</strong><p>Server browser cycles handle GitHub OAuth, automatic token capture, and verified logout. Read-only polling then refreshes balance and usage without launching Chromium.</p></div>
+        <div class="info-callout">
+          <strong>Two independent schedules & celebration rules</strong>
+          <p>Server browser cycles handle GitHub OAuth, automatic token capture, and verified logout. Read-only polling refreshes balances without Chromium. Celebrations animate strictly for durable reset SSE events and respect reduced-motion.</p>
+        </div>
         <p id="settings-error" class="form-error" role="alert"></p>
-        <div class="dialog-actions"><button id="cancel-settings" class="button ghost" type="button">Cancel</button><button class="button primary" type="submit">Save settings</button></div>
+        <div class="dialog-actions">
+          <button id="cancel-settings" class="button ghost" type="button">Cancel</button>
+          <button class="button primary" type="submit">Save settings</button>
+        </div>
+      </form>
+    </dialog>
+
+    <!-- POLICY EDITOR DIALOG -->
+    <dialog id="policy-dialog" aria-modal="true" aria-labelledby="policy-dialog-title">
+      <form id="policy-form" method="dialog">
+        <div class="dialog-heading">
+          <div>
+            <p class="eyebrow">NOTIFICATION POLICY</p>
+            <h2 id="policy-dialog-title">Edit Policy Rule</h2>
+          </div>
+          <button id="close-policy-dialog" class="icon-button" type="button" aria-label="Close policy editor">×</button>
+        </div>
+        <input id="policy-id" type="hidden">
+        <div class="field-grid">
+          <label>Scope Type
+            <select id="policy-scope-type" required>
+              <option value="global">Global (Base rule)</option>
+              <option value="event">Event Type Override</option>
+              <option value="provider">Provider Override</option>
+              <option value="credential">Credential Override</option>
+              <option value="pool">Pool Override</option>
+              <option value="identity">Identity Override</option>
+              <option value="account">Account Override</option>
+              <option value="host">Host Override</option>
+              <option value="session">Session Override</option>
+            </select>
+          </label>
+          <label>Scope Key
+            <input id="policy-target" placeholder="e.g. openai-codex (scope prefix is added automatically)" required>
+          </label>
+          <label>Minimum Severity
+            <select id="policy-min-severity">
+              <option value="info">Info</option>
+              <option value="warning" selected>Warning</option>
+              <option value="error">Error</option>
+              <option value="critical">Critical</option>
+            </select>
+          </label>
+          <label>Cooldown <span>minutes</span>
+            <input id="policy-cooldown" type="number" min="0" max="1440" step="1" value="15">
+          </label>
+          <label>Warning Utilization <span>% used</span>
+            <input id="policy-warning-threshold" type="number" min="1" max="100" step="1" value="80">
+          </label>
+          <label>Critical Utilization <span>% used</span>
+            <input id="policy-critical-threshold" type="number" min="1" max="100" step="1" value="90">
+          </label>
+        </div>
+
+        <div class="field-grid">
+          <label>Channels <span>comma separated</span>
+            <input id="policy-channels" placeholder="default, telegram, slack" value="default">
+          </label>
+          <label>Quiet Hours Timezone
+            <input id="policy-quiet-tz" placeholder="UTC or America/New_York" value="UTC">
+          </label>
+          <label>Quiet Start <span>HH:MM local</span>
+            <input id="policy-quiet-start" placeholder="22:00" pattern="^([01]?[0-9]|2[0-3]):[0-5][0-9]$">
+          </label>
+          <label>Quiet End <span>HH:MM local</span>
+            <input id="policy-quiet-end" placeholder="08:00" pattern="^([01]?[0-9]|2[0-3]):[0-5][0-9]$">
+          </label>
+        </div>
+
+        <div class="switch-grid">
+          <label class="switch-row"><input id="policy-silenced" type="checkbox"><span class="switch"></span><span>Silenced (Mute notifications)</span></label>
+          <label class="switch-row"><input id="policy-quiet-enabled" type="checkbox"><span class="switch"></span><span>Enable Quiet Hours</span></label>
+          <label class="switch-row"><input id="policy-critical-bypass" type="checkbox" checked><span class="switch"></span><span>Critical Bypass Quiet Hours</span></label>
+        </div>
+
+        <div class="effective-preview-box">
+          <p class="eyebrow">LIVE EFFECTIVE PREVIEW</p>
+          <div id="policy-dialog-effective-preview" class="effective-preview-card mini"></div>
+        </div>
+
+        <p id="policy-error" class="form-error" role="alert"></p>
+        <div class="dialog-actions">
+          <button id="cancel-policy-dialog" class="button ghost" type="button">Cancel</button>
+          <button class="button primary" type="submit">Save policy rule</button>
+        </div>
       </form>
     </dialog>
 

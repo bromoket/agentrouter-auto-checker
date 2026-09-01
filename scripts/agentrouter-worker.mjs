@@ -1,5 +1,5 @@
-import { access, chmod, mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
-import { constants as fsConstants } from "node:fs";
+import { access, chmod, lstat, mkdir, open, readFile, realpath, rename, unlink, writeFile } from "node:fs/promises";
+import { constants as fsConstants, existsSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { createInterface } from "node:readline";
@@ -165,6 +165,63 @@ async function restrictSecretDirectory(directoryPath) {
       else reject(new Error(`Failed to restrict browser profile ACL: ${stderr.trim()}`));
     });
   });
+}
+async function validateScreenshotAncestors(targetPath) {
+  if (process.platform === "win32") {
+    throw new Error("Screenshot operations are unsupported on Windows.");
+  }
+  const resolved = path.resolve(targetPath);
+  const segments = [];
+  let current = resolved;
+  while (current && current !== "/" && current !== path.dirname(current)) {
+    segments.unshift(current);
+    current = path.dirname(current);
+  }
+  segments.unshift("/");
+
+  for (const segment of segments) {
+    try {
+      const stats = await lstat(segment);
+      if (stats.isSymbolicLink()) {
+        throw new Error(`Screenshot path ancestor is a symbolic link: ${segment}`);
+      }
+      if (!stats.isDirectory()) {
+        throw new Error(`Screenshot path ancestor is not a directory: ${segment}`);
+      }
+    } catch (error) {
+      if (error.code === "ENOENT") break;
+      throw error;
+    }
+  }
+}
+
+async function openSecureScreenshotDirectory(directoryPath) {
+  if (process.platform === "win32") {
+    throw new Error("Screenshot operations are unsupported on Windows.");
+  }
+  const resolved = path.resolve(directoryPath);
+  await validateScreenshotAncestors(resolved);
+  await mkdir(resolved, { recursive: true, mode: 0o700 });
+  await chmod(resolved, 0o700);
+
+  const stats = await lstat(resolved);
+  if (stats.isSymbolicLink() || !stats.isDirectory()) {
+    throw new Error("Screenshot path is not a directory or is a symbolic link.");
+  }
+  if (typeof process.getuid === "function" && stats.uid !== process.getuid()) {
+    throw new Error("Screenshot root owner UID does not match process UID.");
+  }
+  if ((stats.mode & 0o777) !== 0o700) {
+    throw new Error("Screenshot root directory mode must be strictly 0700.");
+  }
+
+  const handle = await open(resolved, fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | fsConstants.O_NOFOLLOW);
+  const handleStats = await handle.stat();
+  if (handleStats.dev !== stats.dev || handleStats.ino !== stats.ino) {
+    await handle.close();
+    throw new Error("Screenshot root directory identity changed during open.");
+  }
+  return { handle, rootPath: resolved, dev: handleStats.dev, ino: handleStats.ino };
 }
 
 function filterGithubState(state) {
@@ -1327,12 +1384,19 @@ async function runWorker({ account, config }) {
   };
 
   let context;
-  let activePage;
-  let authenticatedUserId;
-  let launchAttempts = 0;
+    if (config.captureScreenshots) {
+      if (process.platform === "win32") {
+        log(`[${account.label}] screenshots are unsupported on Windows; skipping`);
+      } else {
+        const root = await openSecureScreenshotDirectory(config.screenshotDir);
+        await root.handle.close();
+      }
+    }
 
   try {
-    await mkdir(config.screenshotDir, { recursive: true });
+    if (config.captureScreenshots) {
+      await secureScreenshotDirectory(config.screenshotDir);
+    }
     await mkdir(config.accountStateDir, { recursive: true });
     const profileAvailable = await fileExists(profileMarkerPath);
     await mkdir(profilePath, { recursive: true });
@@ -1448,15 +1512,6 @@ async function runWorker({ account, config }) {
     const consoleMetrics = consoleReading.metrics;
     result.dashboardMs = Date.now() - dashboardStarted;
 
-    if (config.captureScreenshots) {
-      const screenshotPath = path.join(
-        config.screenshotDir,
-        `${account.id}-${Date.now()}.png`,
-      );
-      await activePage.screenshot({ path: screenshotPath, fullPage: true });
-      result.screenshotPath = screenshotPath;
-    }
-
     progress("collecting-wallet", "Reading /console/topup and refreshing suspicious $0.00 values.", 72);
     const walletReading = await readUiMetricsWithRefresh(
       activePage,
@@ -1565,13 +1620,48 @@ async function runWorker({ account, config }) {
     result.status = "error";
     result.errorMessage = errorText(error);
     progress("error", result.errorMessage.slice(0, 300), 100);
-    if (activePage && !activePage.isClosed() && config.captureScreenshots) {
-      const failurePath = path.join(
-        config.screenshotDir,
-        `${account.id}-failure-${Date.now()}.png`,
-      );
-      await activePage.screenshot({ path: failurePath, fullPage: true }).catch(() => undefined);
-      result.screenshotPath = failurePath;
+    if (activePage && !activePage.isClosed() && config.captureScreenshots && process.platform !== "win32") {
+      let root;
+      let leafPath;
+      try {
+        root = await openSecureScreenshotDirectory(config.screenshotDir);
+        const screenshotBuffer = await activePage.screenshot({ fullPage: true });
+        const failureFilename = `${account.id}-failure-${Date.now()}.png`;
+        leafPath = existsSync("/proc/self/fd")
+          ? `/proc/self/fd/${root.handle.fd}/${failureFilename}`
+          : path.resolve(root.rootPath, failureFilename);
+
+        const fileHandle = await open(
+          leafPath,
+          fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_NOFOLLOW,
+          0o600,
+        );
+        try {
+          const fileStats = await fileHandle.stat();
+          if (!fileStats.isFile() || (typeof process.getuid === "function" && fileStats.uid !== process.getuid()) || fileStats.dev !== root.dev || (fileStats.mode & 0o777) !== 0o600) {
+            throw new Error("Invalid screenshot target file security state.");
+          }
+          await fileHandle.writeFile(screenshotBuffer);
+          result.screenshotPath = path.resolve(root.rootPath, failureFilename);
+        } finally {
+          await fileHandle.close();
+        }
+      } catch (captureError) {
+        log(`[${account.label}] screenshot capture failed: ${errorText(captureError)}`);
+        if (leafPath) {
+          try {
+            await unlink(leafPath);
+          } catch (unlinkErr) {
+            if (unlinkErr.code !== "ENOENT") {
+              log(`[${account.label}] failed to clean up partial screenshot: ${errorText(unlinkErr)}`);
+            }
+          }
+        }
+      } finally {
+        if (root) {
+          await root.handle.close().catch(() => undefined);
+        }
+      }
     }
 
     if (context && !result.loggedOut) {

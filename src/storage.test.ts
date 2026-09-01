@@ -214,6 +214,25 @@ describe("Store", () => {
     expect(observations[1].classification).toBe("initial");
   });
 
+  test("measures credit observation intervals between observation timestamps, not run starts", () => {
+    const store = createStore();
+    store.saveRun(
+      snapshot({
+        startedAt: "2026-08-09T10:00:00.000Z",
+        endedAt: "2026-08-09T10:00:30.000Z",
+      }),
+    );
+    const id = store.saveRun(
+      snapshot({
+        startedAt: "2026-08-09T11:00:00.000Z",
+        endedAt: "2026-08-09T11:05:00.000Z",
+      }),
+    );
+    const observation = store.getCreditObservationForRun(id);
+    expect(observation?.observedAt).toBe("2026-08-09T11:05:00.000Z");
+    expect(observation?.minutesSincePrevious).toBe(64.5);
+  });
+
   test("deduplicates confirmed AgentRouter daily sign-in grants", () => {
     const store = createStore();
     const creditGrantEvents = [{

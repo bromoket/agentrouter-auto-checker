@@ -31,7 +31,7 @@ export const DEFAULT_AUTOMATION_SETTINGS: AutomationSettings = {
   openDashboardOnStart: true,
   browserHeadless: false,
   twoFactorTimeoutMinutes: 5,
-  captureScreenshots: true,
+  captureScreenshots: false,
   activityLookbackDays: 7,
 };
 
@@ -51,12 +51,20 @@ export function validateAutomationSettings(value: unknown): AutomationSettings {
   const candidate = value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : {};
+  if (process.platform === "win32" && candidate.captureScreenshots === true) {
+    throw new Error("Screenshot capture is unsupported on Windows.");
+  }
   return {
     schedulerEnabled: booleanValue(
       candidate.schedulerEnabled,
       DEFAULT_AUTOMATION_SETTINGS.schedulerEnabled,
     ),
-    intervalMinutes: boundedInteger(candidate.intervalMinutes, 60, 5, 10_080),
+    intervalMinutes: boundedInteger(
+      candidate.intervalMinutes,
+      DEFAULT_AUTOMATION_SETTINGS.intervalMinutes,
+      5,
+      10_080,
+    ),
     endpointPollingEnabled: booleanValue(
       candidate.endpointPollingEnabled,
       DEFAULT_AUTOMATION_SETTINGS.endpointPollingEnabled,
@@ -67,7 +75,12 @@ export function validateAutomationSettings(value: unknown): AutomationSettings {
       1,
       1_440,
     ),
-    accountDelaySeconds: boundedInteger(candidate.accountDelaySeconds, 5, 0, 3_600),
+    accountDelaySeconds: boundedInteger(
+      candidate.accountDelaySeconds,
+      DEFAULT_AUTOMATION_SETTINGS.accountDelaySeconds,
+      0,
+      3_600,
+    ),
     runOnStart: booleanValue(candidate.runOnStart, DEFAULT_AUTOMATION_SETTINGS.runOnStart),
     openDashboardOnStart: booleanValue(
       candidate.openDashboardOnStart,
@@ -77,12 +90,24 @@ export function validateAutomationSettings(value: unknown): AutomationSettings {
       candidate.browserHeadless,
       DEFAULT_AUTOMATION_SETTINGS.browserHeadless,
     ),
-    twoFactorTimeoutMinutes: boundedInteger(candidate.twoFactorTimeoutMinutes, 5, 1, 30),
-    captureScreenshots: booleanValue(
-      candidate.captureScreenshots,
-      DEFAULT_AUTOMATION_SETTINGS.captureScreenshots,
+    twoFactorTimeoutMinutes: boundedInteger(
+      candidate.twoFactorTimeoutMinutes,
+      DEFAULT_AUTOMATION_SETTINGS.twoFactorTimeoutMinutes,
+      1,
+      30,
     ),
-    activityLookbackDays: boundedInteger(candidate.activityLookbackDays, 7, 1, 28),
+    captureScreenshots: process.platform === "win32"
+      ? false
+      : booleanValue(
+          candidate.captureScreenshots,
+          DEFAULT_AUTOMATION_SETTINGS.captureScreenshots,
+        ),
+    activityLookbackDays: boundedInteger(
+      candidate.activityLookbackDays,
+      DEFAULT_AUTOMATION_SETTINGS.activityLookbackDays,
+      1,
+      28,
+    ),
   };
 }
 

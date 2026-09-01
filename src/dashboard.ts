@@ -1,14 +1,22 @@
-import { readdir, rm, unlink } from "node:fs/promises";
-import { basename, join, resolve, sep } from "node:path";
+import { unlink } from "node:fs/promises";
+import { rm } from "node:fs/promises";
+import { join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { AccountInput } from "./accounts";
 import { AccountStore } from "./accounts";
+import { isBoundedJsonError, readBoundedJsonObject } from "./bounded-json";
 import { AuthenticationChallengeBroker } from "./challenges";
 import type { AppConfig } from "./config";
 import { CheckCoordinator } from "./coordinator";
+import { handleObservatoryApi } from "./observatory/api";
+import type { ObservatoryCoordinator } from "./observatory/coordinator";
+import type { ObservatoryStore } from "./observatory/store";
+import {
+  deleteAccountScreenshots,
+  isValidScreenshotFilename,
+  readSecureScreenshotFile,
+} from "./screenshot-retention";
 import { SettingsStore } from "./settings";
 import { Store } from "./storage";
-
 const WEB_ROOT = fileURLToPath(new URL("./web", import.meta.url));
 const CHART_BUNDLE = resolve("node_modules", "chart.js", "dist", "chart.umd.js");
 const ACCOUNT_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/;
@@ -43,21 +51,6 @@ function errorResponse(message: string, status: number): Response {
   return json({ error: message }, status);
 }
 
-async function parseJsonBody(request: Request): Promise<Record<string, unknown>> {
-  const type = request.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase();
-  if (type !== "application/json") {
-    throw new Error("Content-Type must be application/json.");
-  }
-  const text = await request.text();
-  if (text.length > 16_384) {
-    throw new Error("Request body is too large.");
-  }
-  const parsed: unknown = JSON.parse(text);
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error("Request body must be a JSON object.");
-  }
-  return parsed as Record<string, unknown>;
-}
 
 function isAllowedOrigin(request: Request, allowedOrigins: readonly string[]): boolean {
   const origin = request.headers.get("origin");
@@ -103,7 +96,15 @@ export function startDashboard(
   challenges: AuthenticationChallengeBroker,
   coordinator: CheckCoordinator,
   config: AppConfig,
+  observatoryContext?: {
+    store: ObservatoryStore;
+    coordinator: ObservatoryCoordinator;
+  } | null,
 ) {
+  if (config.observatory.enabled && !config.dashboardAuth.enabled) {
+    throw new Error("Observatory dashboard requires enabled API key session authentication.");
+  }
+
   const server = Bun.serve({
     hostname: config.dashboardHost,
     port: config.dashboardPort,
@@ -132,9 +133,60 @@ export function startDashboard(
             checkRunning: coordinatorStatus.running,
           });
         }
+        if (method === "POST" && url.pathname === "/api/auth/session") {
+          const body = await readBoundedJsonObject(request);
+          const apiKey = typeof body.apiKey === "string" ? body.apiKey.trim() : null;
+          if (!apiKey) {
+            return errorResponse("API key is required.", 400);
+          }
+          if (!config.dashboardAuth.verifyApiKey(apiKey)) {
+            return config.dashboardAuth.createUnauthorizedResponse("Invalid API key.");
+          }
+          return config.dashboardAuth.createSessionResponse();
+        }
+
+        if (method === "POST" && url.pathname === "/api/auth/logout") {
+          return config.dashboardAuth.createClearSessionResponse();
+        }
+
+        if (method === "GET" && url.pathname === "/login.css") {
+          return serveFile(join(WEB_ROOT, "login.css"));
+        }
+        if (method === "GET" && url.pathname === "/login.js") {
+          return serveFile(join(WEB_ROOT, "login.js"));
+        }
+
+        const isAuthenticated = config.dashboardAuth.verifyRequest(request);
 
         if (method === "GET" && (url.pathname === "/" || url.pathname === "/index.html")) {
-          return serveFile(join(WEB_ROOT, "dashboard.html"));
+          if (isAuthenticated) {
+            return serveFile(join(WEB_ROOT, "dashboard.html"));
+          }
+          return serveFile(join(WEB_ROOT, "login.html"));
+        }
+
+        if (method === "GET" && url.pathname === "/login.html") {
+          return serveFile(join(WEB_ROOT, "login.html"));
+        }
+
+        const unauthorized = config.dashboardAuth.authenticate(request);
+        if (unauthorized) {
+          return unauthorized;
+        }
+
+        if (url.pathname.startsWith("/api/observatory/")) {
+          if (!config.observatory.enabled || !observatoryContext) {
+            return errorResponse("Observatory is disabled.", 404);
+          }
+          const observatoryResponse = await handleObservatoryApi(request, url, method, {
+            store: observatoryContext.store,
+            coordinator: observatoryContext.coordinator,
+            config,
+          });
+          if (observatoryResponse) {
+            return observatoryResponse;
+          }
+          return errorResponse("Observatory API route not found.", 404);
         }
         if (method === "GET" && url.pathname === "/dashboard.css") {
           return serveFile(join(WEB_ROOT, "dashboard.css"));
@@ -155,8 +207,6 @@ export function startDashboard(
             coordinator: coordinator.getStatus(),
             settings: {
               baseUrl: config.baseUrl,
-              accountFilePath: config.accountFilePath,
-              settingsFilePath: config.settingsFilePath,
               automation,
             },
             challenges: challenges.list(),
@@ -346,13 +396,13 @@ export function startDashboard(
         }
 
         if (method === "POST" && url.pathname === "/api/accounts") {
-          const body = await parseJsonBody(request);
-          const account = await accountStore.upsert(body as AccountInput);
+          const body = await readBoundedJsonObject(request);
+          const account = await accountStore.upsert(body);
           return json({ account }, 201);
         }
 
         if (method === "PUT" && url.pathname === "/api/settings") {
-          const body = await parseJsonBody(request);
+          const body = await readBoundedJsonObject(request);
           const automation = await settingsStore.save(body);
           return json({ automation });
         }
@@ -382,28 +432,13 @@ export function startDashboard(
           if (profilePath.startsWith(profileRoot)) {
             await rm(profilePath, { recursive: true, force: true });
           }
-          // Captures are private account material too. Only delete the exact
-          // filename prefix the worker creates for this validated account id.
-          const screenshotPrefix = `${id}-`;
-          const screenshots = await readdir(config.screenshotDir, { withFileTypes: true }).catch((error) => {
-            if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
-            throw error;
-          });
-          for (const entry of screenshots) {
-            if (!entry.isFile() || !entry.name.startsWith(screenshotPrefix) || !entry.name.endsWith(".png")) {
-              continue;
-            }
-            const screenshotPath = resolve(config.screenshotDir, entry.name);
-            const screenshotRoot = `${resolve(config.screenshotDir)}${sep}`;
-            if (screenshotPath.startsWith(screenshotRoot)) {
-              await unlink(screenshotPath);
-            }
-          }
+          // Hardened screenshot deletion via validated directory pinning
+          await deleteAccountScreenshots(config.screenshotDir, id).catch(() => 0);
           return json({ removed: true });
         }
 
         if (method === "POST" && url.pathname === "/api/checks/run") {
-          const body = await parseJsonBody(request);
+          const body = await readBoundedJsonObject(request);
           const accountId = typeof body.accountId === "string" && body.accountId
             ? body.accountId.trim()
             : undefined;
@@ -431,19 +466,22 @@ export function startDashboard(
 
         if (method === "GET" && url.pathname.startsWith("/screenshots/")) {
           const requestedName = url.pathname.slice("/screenshots/".length);
-          if (
-            !requestedName ||
-            requestedName !== basename(requestedName) ||
-            !/^[A-Za-z0-9._-]+\.png$/.test(requestedName)
-          ) {
+          if (!isValidScreenshotFilename(requestedName)) {
             return errorResponse("Invalid screenshot name.", 400);
           }
-          const screenshotRoot = `${resolve(config.screenshotDir)}${sep}`;
-          const screenshotPath = resolve(config.screenshotDir, requestedName);
-          if (!screenshotPath.startsWith(screenshotRoot)) {
-            return errorResponse("Invalid screenshot path.", 400);
+          try {
+            const buffer = await readSecureScreenshotFile(config.screenshotDir, requestedName);
+            return response(Uint8Array.from(buffer), { headers: { "content-type": "image/png" } });
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            if (message.includes("ENOENT") || message.includes("not found")) {
+              return errorResponse("Screenshot not found.", 404);
+            }
+            if (message.includes("unsupported")) {
+              return errorResponse(message, 501);
+            }
+            return errorResponse("Screenshot access forbidden.", 403);
           }
-          return serveFile(screenshotPath);
         }
 
         if (url.pathname.startsWith("/api/")) {
@@ -451,6 +489,12 @@ export function startDashboard(
         }
         return errorResponse("Not found", 404);
       } catch (error) {
+        if (isBoundedJsonError(error)) {
+          return json(
+            { error: "Request body rejected.", category: error.category },
+            error.status,
+          );
+        }
         const message = error instanceof SyntaxError
           ? "Request body is not valid JSON."
           : error instanceof Error

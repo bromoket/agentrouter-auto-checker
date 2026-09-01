@@ -1,0 +1,55 @@
+[Unit]
+Description=AI Fleet Observatory staging
+Documentation=https://github.com/bromoket/agentrouter-auto-checker
+After=network-online.target tailscaled.service
+Wants=network-online.target tailscaled.service
+
+[Service]
+Type=simple
+User=agentrouter
+Group=agentrouter
+WorkingDirectory=/opt/ai-fleet-observatory
+EnvironmentFile=/etc/ai-fleet-observatory/env
+Environment=HOME=/var/lib/ai-fleet-observatory
+Environment=XDG_CACHE_HOME=/var/lib/ai-fleet-observatory/cache
+Environment=PLAYWRIGHT_BROWSERS_PATH=/var/lib/ai-fleet-observatory/ms-playwright
+ExecStart=/opt/ai-fleet-observatory/scripts/start-server.sh
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=45
+KillMode=control-group
+UMask=0077
+
+StateDirectory=ai-fleet-observatory
+CacheDirectory=ai-fleet-observatory
+RuntimeDirectory=ai-fleet-observatory
+ReadWritePaths=/var/lib/ai-fleet-observatory
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+LockPersonality=true
+ProtectClock=true
+ProtectControlGroups=true
+ProtectHostname=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectProc=invisible
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictRealtime=true
+RestrictSUIDSGID=true
+SystemCallArchitectures=native
+TasksMax=1024
+MemoryHigh=1536M
+MemoryMax=2G
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ai-fleet-observatory
+
+[Install]
+WantedBy=multi-user.target

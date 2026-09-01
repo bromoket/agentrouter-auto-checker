@@ -6,6 +6,7 @@ const state = {
   challenges: [],
   overview: null,
   selectedId: null,
+  activeView: "overview",
   history: [],
   runs: [],
   usage: [],
@@ -13,11 +14,17 @@ const state = {
   credits: [],
   grants: [],
   endpointObservations: [],
+  observatory: { overview: null, quotas: null, identities: null, hosts: null, sessions: null, events: null, policies: null, health: null },
+  observatoryErrors: new Map(),
   charts: new Map(),
   chartTimers: new Map(),
   chartRenderDelay: 0,
+  viewRequest: 0,
   toastTimer: null,
   refreshTimer: null,
+  refreshInFlight: false,
+  fallbackTimer: null,
+  fallbackInFlight: false,
   challengeTicker: null,
   liveConsoleHideTimer: null,
   liveConsoleFadeTimer: null,
@@ -25,6 +32,18 @@ const state = {
   liveConsoleDismissedKey: null,
   liveConsoleExpanded: false,
   revealedTokens: new Map(),
+  sseSource: null,
+  sseRetryTimer: null,
+  sseRetryCount: 0,
+  sseLastEventId: "",
+  sseConnectedAt: null,
+  sseLastMessageAt: null,
+  pendingRefreshFamilies: new Set(),
+  policyEditingTarget: null,
+  policyEditingRule: null,
+  previousFocus: new WeakMap(),
+  celebrationFrame: null,
+  celebrationSettings: { effect: "fireworks", duration: "short", intensity: "low" },
 };
 
 const PALETTE = ["#a855f7", "#d946ef", "#8b5cf6", "#f472b6", "#67e8f9", "#6ee7b7", "#fbbf24"];
@@ -32,6 +51,17 @@ const OVERVIEW_CHARTS = ["overview-money-chart", "overview-earnings-chart", "ove
 const ACCOUNT_CHARTS = ["money-chart", "duration-chart", "activity-chart", "performance-chart", "model-trend-chart"];
 const MATERIAL_BALANCE_EVENT_USD = 25;
 const byId = (id) => document.getElementById(id);
+const dashboardBasePath = (() => {
+  const path = window.location.pathname;
+  if (path.endsWith("/dashboard.html") || path.endsWith("/index.html") || path.endsWith("/login.html")) {
+    return path.slice(0, path.lastIndexOf("/") + 1);
+  }
+  return `${path.replace(/\/+$/, "")}/`;
+})();
+const dashboardUrl = (path) => new URL(
+  `${dashboardBasePath}${path.replace(/^\//, "")}`,
+  window.location.origin,
+);
 
 function element(tag, className, text) {
   const node = document.createElement(tag);
@@ -41,16 +71,71 @@ function element(tag, className, text) {
 }
 
 async function api(path, options = {}) {
-  const init = { method: options.method || "GET", headers: {} };
+  const init = {
+    method: options.method || "GET",
+    headers: { accept: "application/json", ...(options.headers || {}) },
+    credentials: "same-origin",
+    cache: "no-store",
+    signal: options.signal,
+  };
   if (options.body !== undefined) {
     init.headers["content-type"] = "application/json";
     init.body = JSON.stringify(options.body);
   }
-  const response = await fetch(path, init);
+  const response = await fetch(dashboardUrl(path), init);
   let payload = null;
   try { payload = await response.json(); } catch { payload = null; }
-  if (!response.ok) throw new Error(payload?.error || `Request failed (${response.status}).`);
+  if (!response.ok) {
+    const authentication = response.status === 401 ? "Authentication required. Please sign in with your API key." : null;
+    const error = new Error(payload?.error || authentication || `Request failed (${response.status}).`);
+    error.status = response.status;
+    if (response.status === 401) {
+      window.location.replace(dashboardUrl("").toString());
+    }
+    throw error;
+  }
   return payload;
+}
+
+async function optionalApi(name, path) {
+  try {
+    const payload = await api(path);
+    state.observatoryErrors.delete(name);
+    return payload;
+  } catch (error) {
+    state.observatoryErrors.set(name, error);
+    return null;
+  }
+}
+
+function listFrom(payload, keys = []) {
+  if (Array.isArray(payload)) return payload;
+  for (const key of keys) if (Array.isArray(payload?.[key])) return payload[key];
+  if (Array.isArray(payload?.data)) return payload.data;
+  return [];
+}
+
+function valueOrUnavailable(value, formatter = String) {
+  return value === null || value === undefined || value === "" ? "Unavailable" : formatter(value);
+}
+
+function safeLabel(value, fallback = "Unlabelled") {
+  const text = String(value ?? "").replace(/[\u0000-\u001f\u007f]/g, " ").trim()
+    .replace(/\bhttps?:\/\/\S+/gi, "[redacted URL]")
+    .replace(/\b(?:[A-Za-z]:[\\/]|\/(?:Users|home|tmp|var|etc|opt|private)\/)\S+/g, "[redacted path]")
+    .replace(/\b(?:sk|ghp|github_pat|bearer)[-_ ]?[A-Za-z0-9._-]{8,}\b/gi, "[redacted credential]");
+  return text ? text.slice(0, 120) : fallback;
+}
+
+function maskedIdentifier(value, prefix = "ID") {
+  const text = String(value ?? "").trim();
+  if (!text) return `${prefix} unavailable`;
+  return `${prefix} ••••${text.slice(-4).replace(/[^A-Za-z0-9_-]/g, "•")}`;
+}
+
+function numericOrNull(value) {
+  const number = Number(value);
+  return value === null || value === undefined || value === "" || !Number.isFinite(number) ? null : number;
 }
 
 function finite(value, fallback = 0) {
@@ -67,6 +152,7 @@ function formatCompact(value, digits = 1) {
   if (!Number.isFinite(Number(value))) return "—";
   return new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: digits }).format(Number(value));
 }
+
 
 function formatNumber(value, digits = 0) {
   if (!Number.isFinite(Number(value))) return "—";
@@ -208,18 +294,20 @@ function openInspector(title, rows) {
 function createChart(id, config, inspectPoint) {
   destroyChart(id);
   const delay = state.chartRenderDelay;
+  const request = state.viewRequest;
   state.chartRenderDelay += 45;
   const timer = setTimeout(() => {
     state.chartTimers.delete(id);
-    buildChart(id, config, inspectPoint);
+    if (request !== state.viewRequest) return;
+    buildChart(id, config, inspectPoint, request);
   }, delay);
   state.chartTimers.set(id, timer);
 }
 
-function buildChart(id, config, inspectPoint) {
+function buildChart(id, config, inspectPoint, request = state.viewRequest) {
   destroyChart(id);
   const canvas = byId(id);
-  if (!canvas || typeof Chart === "undefined") return;
+  if (request !== state.viewRequest || !canvas?.isConnected || canvas.closest(".hidden") || typeof Chart === "undefined") return;
   const context = canvas.getContext("2d");
   const datasets = (config.data.datasets || []).map((dataset, index) => ({
     borderColor: dataset.borderColor || PALETTE[index % PALETTE.length],
@@ -286,6 +374,7 @@ function renderAccounts() {
     const copy = element("span");
     copy.append(element("strong", null, account.label), element("small", null, history?.lastRunAt ? `${account.githubUsername} · ${formatRelative(history.lastRunAt)}` : `${account.githubUsername} · no data`));
     const health = element("b", `health-dot ${history?.lastStatus || "neutral"}`);
+    health.setAttribute("aria-hidden", "true");
     button.append(icon, copy, health);
     button.addEventListener("click", () => selectAccount(account.id));
     list.append(button);
@@ -309,10 +398,12 @@ function renderTraceRows(container, rows) {
   for (const rowData of rows) {
     const row = element("div", rowData.className || "terminal-line");
     const time = element("time", null, formatDate(rowData.at, true));
-    const stage = element("b", null, rowData.stage.replaceAll("-", " "));
-    const message = element("span", null, rowData.accountLabel ? `${rowData.accountLabel} · ${rowData.message}` : rowData.message);
-    row.append(time, stage, message);
-    container.append(row);
+    const stageLabel = safeLabel(rowData.stage, "status").replaceAll("-", " ");
+    const stage = element("b", null, stageLabel);
+    const safeMessage = rowData.className === "trace-archive-line" ? safeLabel(rowData.message, "Recorded event") : rowData.stage === "error" ? conciseError(rowData.message) : `${stageLabel} status update`;
+    const accountLabel = rowData.accountLabel ? safeLabel(rowData.accountLabel) : null;
+    const message = element("span", null, accountLabel ? `${accountLabel} · ${safeMessage}` : safeMessage);
+    row.append(time, stage, message); container.append(row);
   }
 }
 
@@ -384,7 +475,7 @@ function materialArchiveRows() {
       rows.push({
         at: run.startedAt,
         stage: "error",
-        accountLabel: account?.label || run.accountId,
+        accountLabel: account?.label || maskedIdentifier(run.accountId, "Account"),
         message: conciseError(run.errorMessage || "Check did not complete."),
         className: "trace-archive-line",
       });
@@ -478,7 +569,7 @@ function renderCoordinator() {
   if (showConsole) {
     byId("run-stage").textContent = String(coordinator.currentStage || "idle").replaceAll("-", " ");
     byId("run-percent").textContent = `${finite(coordinator.progressPercent)}%`;
-    byId("run-message").textContent = coordinator.currentMessage || "Cycle status ready.";
+    byId("run-message").textContent = `${safeLabel(coordinator.currentStage, "Collection").replaceAll("-", " ")} status update.`;
     byId("run-account-label").textContent = coordinator.currentAccountLabel
       ? `${coordinator.currentAccountLabel} · ${coordinator.completedAccounts}/${coordinator.totalAccounts} completed`
       : `${coordinator.completedAccounts || 0}/${coordinator.totalAccounts || 0} completed`;
@@ -493,20 +584,21 @@ function renderCoordinator() {
 
 function renderChallenges() {
   const challenge = state.challenges?.[0];
-  byId("mobile-challenge").classList.toggle("hidden", !challenge);
-  if (!challenge) return;
+  const modal = byId("mobile-challenge");
+  const wasHidden = modal.classList.contains("hidden");
+  modal.classList.toggle("hidden", !challenge);
+  if (!challenge) {
+    if (!wasHidden) { const previous = state.previousFocus.get(modal); if (previous?.isConnected) previous.focus(); }
+    return;
+  }
+  if (wasHidden) { state.previousFocus.set(modal, document.activeElement); requestAnimationFrame(() => byId("challenge-stop").focus()); }
   const isWaf = challenge.kind === "agentrouter-waf";
-  byId("challenge-eyebrow").textContent = isWaf
-    ? "AGENTROUTER · ACCESS VERIFICATION"
-    : "GITHUB MOBILE · SECURE APPROVAL";
-  byId("challenge-account").textContent = isWaf
-    ? `Verify ${challenge.accountLabel}`
-    : `Approve ${challenge.accountLabel}`;
-  byId("challenge-prompt").textContent = challenge.prompt;
-  byId("challenge-code").textContent = challenge.verificationCode || (isWaf ? "SLIDE" : "PUSH");
-  byId("challenge-status").textContent = isWaf
-    ? "Watching the visible browser"
-    : "Listening for GitHub";
+  byId("challenge-eyebrow").textContent = isWaf ? "AGENTROUTER · ACCESS VERIFICATION" : "GITHUB MOBILE · SECURE APPROVAL";
+  const accountLabel = safeLabel(challenge.accountLabel, "account");
+  byId("challenge-account").textContent = isWaf ? `Verify ${accountLabel}` : `Approve ${accountLabel}`;
+  byId("challenge-prompt").textContent = isWaf ? "Complete the access verification in the visible browser." : "Open GitHub Mobile and approve the request.";
+  byId("challenge-code").textContent = safeLabel(challenge.verificationCode, isWaf ? "SLIDE" : "PUSH");
+  byId("challenge-status").textContent = isWaf ? "Watching the visible browser" : "Listening for GitHub";
   updateChallengeCountdown();
 }
 
@@ -577,7 +669,7 @@ function renderOverviewCharts() {
     const point = portfolio[index];
     if (!point) return;
     const account = state.accounts.find((item) => item.id === point.changedAccount);
-    openInspector("Portfolio snapshot", [["Observed", formatDate(point.startedAt, true)], ["Triggered by", account?.label || point.changedAccount], ["Combined balance", formatMoney(point.balance, 4)], ["Lifetime spend", formatMoney(point.consumed, 4)]]);
+    openInspector("Portfolio snapshot", [["Observed", formatDate(point.startedAt, true)], ["Triggered by", account?.label || maskedIdentifier(point.changedAccount, "Account")], ["Combined balance", formatMoney(point.balance, 4)], ["Lifetime spend", formatMoney(point.consumed, 4)]]);
   });
 
   const confirmedPoints = accountData.flatMap((item) => {
@@ -803,7 +895,7 @@ function renderGrants() {
       element("td", null, formatInterval(item.minutesSincePrior)),
       element("td", null, "Daily sign-in"),
       element("td", "status-ok", `+${formatMoney(item.amount, 4)}`),
-      element("td", null, item.description || "AgentRouter system event"),
+      element("td", null, "Confirmed AgentRouter grant evidence"),
     );
     body.append(row);
   }
@@ -826,16 +918,22 @@ function renderActivity() {
   const activity = state.activity.filter(meaningfulActivity);
   for (const item of activity) {
     const row = element("tr");
-    row.append(element("td", null, formatDate(finite(item.created_at) * 1_000, true)), element("td", null, item.token_name || "—"), element("td", null, item.model_name || "—"), element("td", null, formatNumber(item.prompt_tokens)), element("td", null, formatNumber(item.completion_tokens)), element("td", null, formatMoney(finite(item.quota) / quotaPerUnit, 4)), element("td", null, item.group || "—"), element("td", null, item.is_stream ? "Stream" : "Standard"));
+    row.append(element("td", null, formatDate(finite(item.created_at) * 1_000, true)), element("td", null, item.token_name ? maskedIdentifier(item.token_name, "Credential") : "Unavailable"), element("td", null, safeLabel(item.model_name, "Unavailable")), element("td", null, formatNumber(item.prompt_tokens)), element("td", null, formatNumber(item.completion_tokens)), element("td", null, formatMoney(finite(item.quota) / quotaPerUnit, 4)), element("td", null, item.group ? maskedIdentifier(item.group, "Group") : "Unavailable"), element("td", null, item.is_stream ? "Stream" : "Standard"));
     body.append(row);
   }
   if (!activity.length) { const row = element("tr"); const cell = element("td", "muted", "No meaningful usage rows captured yet."); cell.colSpan = 8; row.append(cell); body.append(row); }
 }
 
 function conciseError(message) {
-  if (!message) return "";
-  const first = String(message).split(/\r?\n/)[0].replace(/^Error:\s*/, "");
-  return first.length > 110 ? `${first.slice(0, 110)}…` : first;
+  const text = String(message || "").toLowerCase();
+  if (!text) return "No public error detail";
+  if (/cancel/.test(text)) return "Collection cancelled";
+  if (/timeout|timed out/.test(text)) return "Operation timed out";
+  if (/auth|login|credential|unauthor/.test(text)) return "Authentication failed";
+  if (/network|fetch|connect|socket|dns/.test(text)) return "Network request failed";
+  if (/challenge|approval|two.?factor|2fa/.test(text)) return "Approval challenge incomplete";
+  if (/parse|schema|invalid response/.test(text)) return "Provider response was invalid";
+  return "Collection failed";
 }
 
 function renderRuns() {
@@ -847,14 +945,15 @@ function renderRuns() {
     const detailCell = element("td");
     if (run.errorMessage) {
       const details = element("details", "error-details");
-      details.append(element("summary", null, conciseError(run.errorMessage)), element("p", null, run.errorMessage));
+      const publicError = conciseError(run.errorMessage);
+      details.append(element("summary", null, publicError), element("p", null, `${publicError}. Sensitive runtime details are available only in protected server logs.`));
       detailCell.append(details);
     } else detailCell.textContent = "—";
     row.append(detailCell);
     const capture = element("td");
     if (run.screenshotPath) {
       const filename = String(run.screenshotPath).replaceAll("\\", "/").split("/").pop();
-      if (/^[A-Za-z0-9._-]+\.png$/.test(filename)) { const link = element("a", "capture-link", "Open capture ↗"); link.href = `/screenshots/${encodeURIComponent(filename)}`; link.target = "_blank"; link.rel = "noopener noreferrer"; capture.append(link); }
+      if (/^[A-Za-z0-9._-]+\.png$/.test(filename)) { const link = element("a", "capture-link", "Open capture ↗"); link.href = dashboardUrl(`screenshots/${encodeURIComponent(filename)}`).toString(); link.target = "_blank"; link.rel = "noopener noreferrer"; capture.append(link); }
     } else capture.textContent = "—";
     row.append(capture); body.append(row);
   }
@@ -879,33 +978,807 @@ function renderAccount() {
   renderAccountMetrics(); renderAccountCharts(); renderUsage(); renderGrants(); renderCredits(); renderActivity(); renderRuns(); renderTraceArchive();
 }
 
-function showOverview() {
+function statusClass(value) {
+  return String(value || "unknown").toLowerCase().replace(/[^a-z0-9_-]/g, "-");
+}
+
+function statusBadge(value, fallback = "unknown") {
+  const label = safeLabel(value, fallback).replaceAll("_", " ");
+  return element("span", `obs-badge ${statusClass(value || fallback)}`, label);
+}
+
+function observedAtOf(item) {
+  return item?.observedAt || item?.occurredAt || item?.collectedAt || item?.lastObservedAt || item?.lastActiveAt || item?.updatedAt || item?.createdAt || item?.generatedAt || null;
+}
+
+function isStale(value, thresholdMs = 10 * 60_000) {
+  const parsed = Date.parse(value || "");
+  return Number.isFinite(parsed) && Date.now() - parsed > thresholdMs;
+}
+
+function metadataBadges(item, defaultSource, defaultScope) {
+  const row = element("div", "obs-badges");
+  const source = item?.source || defaultSource;
+  const scope = item?.scope || defaultScope;
+  const observedAt = observedAtOf(item);
+  if (source) row.append(element("span", "obs-badge source", `Source · ${safeLabel(source)}`));
+  if (scope) row.append(element("span", "obs-badge scope", `Scope · ${safeLabel(scope)}`));
+  const ageValue = item?.age;
+  if (ageValue !== null && ageValue !== undefined && !observedAt) {
+    const ageSeconds = typeof ageValue === "number" ? ageValue : Number.parseFloat(ageValue);
+    const staleAge = Number.isFinite(ageSeconds) && ageSeconds > 600;
+    const ageText = typeof ageValue === "number" ? (ageValue < 120 ? `${Math.round(ageValue)}s` : `${Math.round(ageValue / 60)}m`) : safeLabel(ageValue);
+    row.append(element("span", `obs-badge ${staleAge ? "stale" : "age"}`, `${staleAge ? "Stale" : "Age"} · ${ageText}`));
+  } else if (observedAt) {
+    const stale = isStale(observedAt);
+    const age = element("span", `obs-badge ${stale ? "stale" : "age"}`, stale ? `Stale · ${formatRelative(observedAt)}` : `Observed ${formatRelative(observedAt)}`);
+    age.title = `Observed ${formatDate(observedAt, true)}`;
+    row.append(age);
+  } else row.append(element("span", "obs-badge stale", "Observation age unavailable"));
+  return row;
+}
+
+function stateCard(kind, title, description) {
+  const card = element("div", `state-card ${kind || ""}`.trim());
+  const icons = { error: "△", empty: "◇", stale: "◷", offline: "⊘", loading: "◌" };
+  card.append(element("span", "state-icon", icons[kind] || "◇"), element("h3", null, title), element("p", null, description));
+  return card;
+}
+
+function renderEndpointState(container, endpoint, emptyCopy) {
+  const error = state.observatoryErrors.get(endpoint);
+  if (error) {
+    container.replaceChildren(stateCard("error", `${safeLabel(endpoint)} telemetry unavailable`, error.status === 404 ? "This observatory capability is unsupported by the connected server." : safeLabel(error.message, "The endpoint could not be reached.")));
+    return true;
+  }
+  const payload = state.observatory[endpoint];
+  if (payload === null) {
+    container.replaceChildren(stateCard("loading", "Loading observatory telemetry", "Waiting for the first authenticated response."));
+    return true;
+  }
+  if (emptyCopy && listFrom(payload, emptyCopy.keys).length === 0) {
+    container.replaceChildren(stateCard("empty", emptyCopy.title, emptyCopy.description));
+    return true;
+  }
+  return false;
+}
+
+function renderObservatoryOverview() {
+  const metrics = byId("observatory-summary-metrics");
+  metrics.replaceChildren();
+  const data = state.observatory.overview;
+  const hosts = listFrom(state.observatory.hosts, ["hosts"]);
+  const quotas = listFrom(state.observatory.quotas, ["quotas", "quotaWindows", "windows"]);
+  const identities = listFrom(state.observatory.identities, ["identities", "credentials"]);
+  const sessions = listFrom(state.observatory.sessions, ["sessions"]);
+  if (!data && state.observatoryErrors.has("overview")) {
+    metrics.append(metricCard("Fleet hosts", "Unavailable", "Overview endpoint unsupported", PALETTE[6], "stale"));
+  } else {
+    const totals = data?.totals || data?.summary || data || {};
+    const hostTotal = numericOrNull(totals.hostCount ?? totals.hosts) ?? (state.observatory.hosts ? hosts.length : null);
+    const onlineHosts = numericOrNull(totals.onlineHosts) ?? (state.observatory.hosts ? hosts.filter((item) => item.status === "online").length : null);
+    const identityTotal = numericOrNull(totals.identityCount ?? totals.identities) ?? (state.observatory.identities ? identities.length : null);
+    const activeSessions = numericOrNull(totals.activeSessions) ?? (state.observatory.sessions ? sessions.filter((item) => item.status === "active").length : null);
+    const warningQuotas = numericOrNull(totals.warningQuotas) ?? (state.observatory.quotas ? quotas.filter((item) => ["warning", "critical", "exhausted"].includes(String(item.status))).length : null);
+    metrics.append(
+      metricCard("Fleet hosts", valueOrUnavailable(hostTotal, formatNumber), hostTotal === null ? "Observatory data unavailable" : `${formatNumber(onlineHosts)} online`, PALETTE[4]),
+      metricCard("Provider identities", valueOrUnavailable(identityTotal, formatNumber), identityTotal === null ? "Identity endpoint unavailable" : "Credential health observed", PALETTE[0]),
+      metricCard("Active sessions", valueOrUnavailable(activeSessions, formatNumber), state.observatory.sessions ? "OMP execution telemetry" : "Session endpoint unavailable", PALETTE[5]),
+      metricCard("Quota alerts", state.observatory.quotas ? formatNumber(warningQuotas) : "Unavailable", state.observatory.quotas ? "Warning, critical, or exhausted" : "Quota endpoint unavailable", warningQuotas ? PALETTE[6] : PALETTE[5]),
+    );
+  }
+}
+
+function quotaStatus(item) {
+  const used = Number(item?.usedFraction);
+  if (String(item?.status).toLowerCase() === "exhausted" || used >= 1) return "exhausted";
+  if (String(item?.status).toLowerCase() === "critical" || used >= .95) return "critical";
+  if (String(item?.status).toLowerCase() === "warning" || used >= .8) return "warning";
+  return item?.status || "ok";
+}
+
+function renderQuotaSummary(items) {
+  const container = byId("quotas-summary-metrics"); container.replaceChildren();
+  const available = state.observatory.quotas !== null && !state.observatoryErrors.has("quotas");
+  const value = (number) => available ? formatNumber(number) : "Unavailable";
+  container.append(
+    metricCard("Tracked windows", value(items.length), available ? "Current provider quota windows" : "Quota endpoint unavailable", PALETTE[0]),
+    metricCard("Normal", value(items.filter((item) => quotaStatus(item) === "ok").length), available ? "Below warning threshold" : "Quota endpoint unavailable", PALETTE[5]),
+    metricCard("Warning", value(items.filter((item) => quotaStatus(item) === "warning").length), available ? "80–95% utilized" : "Quota endpoint unavailable", PALETTE[6]),
+    metricCard("Critical", value(items.filter((item) => ["critical", "exhausted"].includes(quotaStatus(item))).length), available ? "At risk or exhausted" : "Quota endpoint unavailable", PALETTE[3]),
+  );
+}
+
+function renderQuotas() {
+  const container = byId("quotas-container");
+  const items = listFrom(state.observatory.quotas, ["quotas", "quotaWindows", "windows"]);
+  renderQuotaSummary(items);
+  if (renderEndpointState(container, "quotas", { keys: ["quotas", "quotaWindows", "windows"], title: "No provider quota windows", description: "No provider has reported a quota observation yet. Values are intentionally unavailable rather than shown as zero." })) return;
+  const providerFilter = byId("quota-provider-filter").value;
+  const statusFilter = byId("quota-status-filter").value;
+  const filtered = items.filter((item) => {
+    const provider = String(item.provider || item.kind || "").toLowerCase();
+    const status = quotaStatus(item);
+    return (providerFilter === "all" || provider.includes(providerFilter)) && (statusFilter === "all" || status === statusFilter);
+  });
+  container.replaceChildren();
+  if (!filtered.length) {
+    container.append(stateCard("empty", "No matching quota windows", "Adjust the provider or status filter to inspect other windows."));
+    return;
+  }
+  for (const item of filtered) {
+    const status = quotaStatus(item);
+    const observedAt = observedAtOf(item);
+    const card = element("article", `quota-card ${status}${isStale(observedAt) ? " stale" : ""}`);
+    const heading = element("div", "entity-heading");
+    const identity = element("div");
+    const quotaLabel = safeLabel(item.resetLabel || item.meter || item.model, "Quota window");
+    const windowLabel = item.windowId ? `${quotaLabel} · ${maskedIdentifier(item.windowId, "Window")}` : quotaLabel;
+    identity.append(element("h3", null, safeLabel(item.provider || item.kind, "Unknown provider")), element("p", null, windowLabel));
+    heading.append(identity, statusBadge(status));
+    const used = Number(item.usedFraction);
+    const meter = element("div", "quota-meter");
+    const copy = element("div", "quota-meter-copy");
+    copy.append(element("strong", null, Number.isFinite(used) ? `${Math.round(used * 100)}%` : "Unavailable"), element("span", null, "utilized"));
+    const track = element("div", "quota-track");
+    const fill = element("i", "quota-fill");
+    fill.style.width = Number.isFinite(used) ? `${Math.min(100, Math.max(0, used * 100))}%` : "0%";
+    track.append(fill); meter.append(copy, track);
+    const stats = element("div", "entity-stats");
+    const remaining = element("div", "entity-stat");
+    remaining.append(element("span", null, "Remaining"), element("strong", null, valueOrUnavailable(item.remainingUnits ?? (Number.isFinite(Number(item.remainingFraction)) ? `${Math.round(Number(item.remainingFraction) * 100)}%` : null), (value) => typeof value === "number" ? formatCompact(value) : String(value))));
+    const reset = element("div", "entity-stat");
+    reset.append(element("span", null, "Reset"), element("strong", null, item.resetsAt ? formatRelative(item.resetsAt) : "Unavailable"));
+    stats.append(remaining, reset);
+    card.append(heading, meter, stats, metadataBadges(item, "Provider collector", safeLabel(item.provider || "provider")));
+    container.append(card);
+  }
+}
+function renderCredentials() {
+  const container = byId("credentials-container");
+  const items = listFrom(state.observatory.identities, ["identities", "credentials"]);
+  const metrics = byId("credentials-summary-metrics");
+  const available = state.observatory.identities !== null && !state.observatoryErrors.has("identities");
+  const value = (number) => available ? formatNumber(number) : "Unavailable";
+  metrics.replaceChildren(
+    metricCard("Identities", value(items.length), available ? "Observed provider credentials" : "Identity endpoint unavailable", PALETTE[0]),
+    metricCard("Healthy", value(items.filter((item) => item.health === "healthy").length), available ? "Last provider check successful" : "Identity endpoint unavailable", PALETTE[5]),
+    metricCard("Degraded", value(items.filter((item) => ["degraded", "rate_limited"].includes(item.health)).length), available ? "Degraded or rate limited" : "Identity endpoint unavailable", PALETTE[6]),
+    metricCard("Unhealthy", value(items.filter((item) => ["unhealthy", "exhausted"].includes(item.health)).length), available ? "Needs intervention" : "Identity endpoint unavailable", PALETTE[3]),
+  );
+  if (renderEndpointState(container, "identities", { keys: ["identities", "credentials"], title: "No provider identities", description: "No credential metadata has been observed. Secret values are never displayed here." })) return;
+  const filter = byId("credential-health-filter").value;
+  const filtered = items.filter((item) => filter === "all" || item.health === filter);
+  container.replaceChildren();
+  if (!filtered.length) { container.append(stateCard("empty", "No matching credentials", "Change the health filter to inspect other identities.")); return; }
+  for (const item of filtered) {
+    const observedAt = observedAtOf(item);
+    const card = element("article", `identity-card ${statusClass(item.health)}${isStale(observedAt) ? " stale" : ""}`);
+    const heading = element("div", "entity-heading");
+    const identity = element("div");
+    identity.append(element("h3", null, safeLabel(item.label, "Provider identity")), element("p", "identity-safe-id", `${safeLabel(item.kind, "Provider")} · ${maskedIdentifier(item.identityId, "Credential")}`));
+    heading.append(identity, statusBadge(item.health, "unknown"));
+    const stats = element("div", "entity-stats");
+    const model = element("div", "entity-stat"); model.append(element("span", null, "Active model"), element("strong", null, valueOrUnavailable(item.activeModel)));
+    const failures = element("div", "entity-stat"); failures.append(element("span", null, "Consecutive failures"), element("strong", null, item.consecutiveFailures === null || item.consecutiveFailures === undefined ? "Unavailable" : formatNumber(item.consecutiveFailures)));
+    stats.append(model, failures);
+    const message = item.statusMessage ? element("p", "muted", `${safeLabel(item.health, "Unknown").replaceAll("_", " ")} provider state reported.`) : null;
+    card.append(heading, stats);
+    if (message) card.append(message);
+    card.append(metadataBadges(item, "Credential collector", safeLabel(item.kind, "provider")));
+    container.append(card);
+  }
+}
+function renderHosts() {
+  const container = byId("hosts-container");
+  const items = listFrom(state.observatory.hosts, ["hosts"]);
+  const metrics = byId("hosts-summary-metrics");
+  const available = state.observatory.hosts !== null && !state.observatoryErrors.has("hosts");
+  const value = (number) => available ? formatNumber(number) : "Unavailable";
+  metrics.replaceChildren(
+    metricCard("Fleet hosts", value(items.length), available ? "Observed host runners" : "Host endpoint unavailable", PALETTE[0]),
+    metricCard("Online", value(items.filter((item) => item.status === "online").length), available ? "Heartbeat current" : "Host endpoint unavailable", PALETTE[5]),
+    metricCard("Degraded", value(items.filter((item) => item.status === "degraded").length), available ? "Partial availability" : "Host endpoint unavailable", PALETTE[6]),
+    metricCard("Offline", value(items.filter((item) => item.status === "offline").length), available ? "Heartbeat lost" : "Host endpoint unavailable", PALETTE[3]),
+  );
+  if (renderEndpointState(container, "hosts", { keys: ["hosts"], title: "No fleet hosts", description: "No host heartbeat has reached the observatory yet." })) return;
+  const filter = byId("host-status-filter").value;
+  const filtered = items.filter((item) => filter === "all" || item.status === filter);
+  container.replaceChildren();
+  if (!filtered.length) { container.append(stateCard("empty", "No matching hosts", "Change the status filter to inspect other fleet hosts.")); return; }
+  for (const item of filtered) {
+    const observedAt = observedAtOf(item);
+    const card = element("article", `host-card ${statusClass(item.status)}${isStale(observedAt) ? " stale" : ""}`);
+    const heading = element("div", "entity-heading");
+    const identity = element("div");
+    identity.append(element("h3", null, safeLabel(item.operatorLabel || item.hostname, "Fleet host")), element("p", "host-safe-id", maskedIdentifier(item.hostId, "Host")));
+    heading.append(identity, statusBadge(item.status, "unknown"));
+    const stats = element("div", "entity-stats");
+    const hostStats = [["Collector version", item.collectorVersion || item.agentVersion, (value) => safeLabel(value)], ["Active sessions", item.activeSessionsCount, formatNumber], ["Provider identities", item.activeIdentitiesCount, formatNumber]];
+    for (const [label, value, formatter] of hostStats) {
+      const cell = element("div", "entity-stat"); cell.append(element("span", null, label), element("strong", null, valueOrUnavailable(value, formatter))); stats.append(cell);
+    }
+    const metadata = element("div", "metadata-list");
+    for (const [key, value] of Object.entries(item.metrics || {}).filter(([, value]) => typeof value === "number" || typeof value === "boolean").slice(0, 8)) metadata.append(element("span", "metadata-chip", `${safeLabel(key)} · ${String(value)}`));
+    card.append(heading, stats);
+    if (metadata.childElementCount) card.append(metadata);
+    card.append(metadataBadges(item, "Host heartbeat", "Fleet"));
+    container.append(card);
+  }
+}
+
+function normalizedSessionStatus(status) {
+  return status === "closed" ? "completed" : safeLabel(status, "unknown").toLowerCase();
+}
+function sessionCost(item) {
+  if (Number.isFinite(Number(item?.costEstimate))) return Number(item.costEstimate);
+  if (Number.isFinite(Number(item?.costMicros))) return Number(item.costMicros) / 1_000_000;
+  return null;
+}
+
+
+function renderSessions() {
+  const body = byId("sessions-body");
+  const items = listFrom(state.observatory.sessions, ["sessions"]);
+  const metrics = byId("sessions-summary-metrics");
+  const tokenValues = items.map((item) => Number(item.totalTokens)).filter(Number.isFinite);
+  const costValues = items.map(sessionCost).filter((value) => value !== null);
+  const available = state.observatory.sessions !== null && !state.observatoryErrors.has("sessions");
+  metrics.replaceChildren(
+    metricCard("Sessions", available ? formatNumber(items.length) : "Unavailable", available ? "Observed OMP sessions" : "Session endpoint unavailable", PALETTE[0]),
+    metricCard("Active", available ? formatNumber(items.filter((item) => normalizedSessionStatus(item.status) === "active").length) : "Unavailable", available ? "Currently executing" : "Session endpoint unavailable", PALETTE[4]),
+    metricCard("Failed", available ? formatNumber(items.filter((item) => normalizedSessionStatus(item.status) === "failed").length) : "Unavailable", available ? "Recorded failures" : "Session endpoint unavailable", PALETTE[3]),
+    metricCard("Tokens", available && tokenValues.length ? formatCompact(tokenValues.reduce((sum, value) => sum + value, 0)) : "Unavailable", available && tokenValues.length ? "Prompt + completion" : "Token usage unsupported", PALETTE[1]),
+    metricCard("Cost signal", available && costValues.length ? formatMoney(costValues.reduce((sum, value) => sum + value, 0), 4) : "Unpriced", available && costValues.length ? "Estimated, not billed" : "Provider pricing unavailable", PALETTE[6]),
+  );
+  body.replaceChildren();
+  const error = state.observatoryErrors.get("sessions");
+  if (error) { const row = element("tr"); const cell = element("td", "meta-cell", error.status === 404 ? "Session telemetry unsupported by this server." : safeLabel(error.message)); cell.colSpan = 11; row.append(cell); body.append(row); return; }
+  const filter = byId("session-status-filter").value;
+  const filtered = items.filter((item) => filter === "all" || normalizedSessionStatus(item.status) === filter);
+  for (const item of filtered) {
+    const row = element("tr");
+    const metadata = metadataBadges(item, "OMP collector", "Session");
+    const metadataCell = element("td", "meta-cell"); metadataCell.append(metadata);
+    row.append(
+      element("td", "session-safe-id", maskedIdentifier(item.sessionId, "Session")),
+      element("td", "host-safe-id", maskedIdentifier(item.hostId, "Host")),
+      element("td", "identity-safe-id", item.identityId ? maskedIdentifier(item.identityId, "Identity") : "Unavailable"),
+    );
+    const statusCell = element("td"); statusCell.append(statusBadge(normalizedSessionStatus(item.status))); row.append(statusCell);
+    row.append(
+      element("td", null, valueOrUnavailable(item.startedAt, (value) => formatDate(value, true))),
+      element("td", null, valueOrUnavailable(item.durationMs, formatDuration)),
+      element("td", null, valueOrUnavailable(item.totalTokens, formatCompact)),
+      element("td", null, valueOrUnavailable(item.toolCallsCount, formatNumber)),
+      element("td", null, valueOrUnavailable(item.errorCount, formatNumber)),
+      element("td", null, valueOrUnavailable(sessionCost(item), (value) => formatMoney(value, 4))),
+      metadataCell,
+    );
+    body.append(row);
+  }
+  if (!filtered.length) { const row = element("tr"); const cell = element("td", "muted", "No matching OMP sessions. Missing values are not interpreted as zero."); cell.colSpan = 11; row.append(cell); body.append(row); }
+}
+
+function policyRules() {
+  return listFrom(state.observatory.policies, ["policies", "rules"]);
+}
+
+function defaultPolicy() {
+  return {
+    target: "global", enabled: true, silenced: false, telegramImmediate: true, dashboardOnly: false,
+    minSeverity: "warning", thresholds: { warningRemainingFraction: .2, criticalRemainingFraction: .1, exhaustedRemainingFraction: .02, hysteresisFraction: .02 },
+    consecutiveFailuresThreshold: 3, cooldownMinutes: 15, throttleIntervalMs: 60_000, channels: ["default"],
+    quietHoursEnabled: false, quietHoursTimezone: "UTC", quietHoursStart: null, quietHoursEnd: null, criticalBypassQuietHours: true,
+    digestEnabled: false, digestIntervalMinutes: null, digestSchedule: null, digestTimezone: "UTC", recipient: null,
+    matchEventTypes: [], matchHostIds: [], matchIdentityIds: [],
+  };
+}
+
+function parsePolicyTargetClient(target) {
+  const value = String(target || "global").trim();
+  if (value === "global" || value === "*") return { scopeType: "global", scopeKey: "", target: "global" };
+  const colon = value.indexOf(":");
+  if (colon < 1) return { scopeType: "provider", scopeKey: value, target: `provider:${value}` };
+  return { scopeType: value.slice(0, colon).toLowerCase(), scopeKey: value.slice(colon + 1), target: value };
+}
+
+function globalPolicy() {
+  return policyRules().find((rule) => parsePolicyTargetClient(rule.target).scopeType === "global") || defaultPolicy();
+}
+
+function canonicalPolicyTarget(scopeType, scopeKey) {
+  if (scopeType === "global") return "global";
+  const key = String(scopeKey || "").trim().replace(new RegExp(`^${scopeType}:`, "i"), "");
+  return key ? `${scopeType}:${key}` : "";
+}
+
+function resolvePolicy(target) {
+  const base = { ...defaultPolicy(), ...globalPolicy(), thresholds: { ...defaultPolicy().thresholds, ...(globalPolicy().thresholds || {}) } };
+  const requested = policyRules().find((rule) => rule.target === target);
+  const resolved = { ...base, thresholds: { ...base.thresholds } };
+  const overridden = new Set();
+  if (requested && requested !== globalPolicy()) {
+    for (const [key, value] of Object.entries(requested)) {
+      if (value !== null && value !== undefined) { resolved[key] = key === "thresholds" ? { ...resolved.thresholds, ...value } : value; overridden.add(key); }
+    }
+  }
+  return { resolved, overridden, requested };
+}
+
+function previewValue(key, value) {
+  if (key === "warningUtilization") return `${Math.round((1 - Number(value)) * 100)}% used`;
+  if (key === "criticalUtilization") return `${Math.round((1 - Number(value)) * 100)}% used`;
+  if (Array.isArray(value)) return value.length ? value.map((item) => safeLabel(item)).join(", ") : "None";
+  if (typeof value === "boolean") return value ? "Enabled" : "Disabled";
+  return valueOrUnavailable(value);
+}
+
+function renderEffectivePreview(container, resolvedPolicy) {
+  container.replaceChildren();
+  const { resolved, overridden } = resolvedPolicy;
+  const thresholdValues = resolved.thresholds || {};
+  const fields = [
+    ["minSeverity", "Minimum severity", resolved.minSeverity], ["silenced", "Notifications silenced", resolved.silenced], ["cooldownMinutes", "Cooldown minutes", resolved.cooldownMinutes],
+    ["channels", "Delivery channels", resolved.channels], ["warningUtilization", "Warning threshold", thresholdValues.warningRemainingFraction], ["criticalUtilization", "Critical threshold", thresholdValues.criticalRemainingFraction],
+    ["quietHoursTimezone", "Quiet hours timezone", resolved.quietHoursTimezone], ["criticalBypassQuietHours", "Critical bypass", resolved.criticalBypassQuietHours],
+  ];
+  for (const [key, label, rawValue] of fields) {
+    const row = element("div", "effective-row");
+    row.append(element("span", null, label));
+    const provenanceKey = key.endsWith("Utilization") ? "thresholds" : key;
+    const value = element("strong", null, previewValue(key, rawValue));
+    value.append(element("small", `inheritance-mark${overridden.has(provenanceKey) ? " override" : ""}`, overridden.has(provenanceKey) ? "override" : "inherited"));
+    row.append(value); container.append(row);
+  }
+}
+
+function policyTargetLabel(target) {
+  const parsed = parsePolicyTargetClient(target);
+  if (parsed.scopeType === "global") return "Global policy";
+  if (["provider", "event"].includes(parsed.scopeType)) return `${safeLabel(parsed.scopeType)} · ${safeLabel(parsed.scopeKey).replaceAll("_", " ")}`;
+  return `${safeLabel(parsed.scopeType)} · ${maskedIdentifier(parsed.scopeKey, "Target")}`;
+}
+
+function renderPolicies() {
+  const container = byId("policies-list");
+  const rules = policyRules();
+  if (renderEndpointState(container, "policies", { keys: ["policies", "rules"], title: "No notification policies", description: "No server policy rules are configured. Create a global policy to establish defaults." })) {
+    renderEffectivePreview(byId("effective-policy-preview"), resolvePolicy(byId("policy-preview-scope").value));
+    return;
+  }
+  container.replaceChildren();
+  for (const rule of rules) {
+    const card = element("article", "policy-card");
+    const copy = element("div");
+    const parsedTarget = parsePolicyTargetClient(rule.target);
+    copy.append(element("h3", null, policyTargetLabel(rule.target)), element("p", null, `${safeLabel(parsedTarget.scopeType, "global")} scope · ${safeLabel(rule.minSeverity, "warning")}+ · ${Array.isArray(rule.channels) && rule.channels.length ? rule.channels.map((item) => safeLabel(item)).join(", ") : "inherited channels"}`));
+    copy.append(metadataBadges(rule, "Policy engine", safeLabel(parsedTarget.scopeType, "global")));
+    const actions = element("div", "policy-card-actions");
+    const edit = element("button", "trace-button", "Edit"); edit.type = "button"; edit.addEventListener("click", () => openPolicyDialog(rule)); actions.append(edit);
+    card.append(copy, actions); container.append(card);
+  }
+  renderEffectivePreview(byId("effective-policy-preview"), resolvePolicy(byId("policy-preview-scope").value));
+}
+
+function eventPayload() {
+  return state.observatory.events || {};
+}
+
+function eventPresentation(item) {
+  const type = safeLabel(item?.eventType, "observatory_event").toLowerCase().replace(/[^a-z0-9_]/g, "_");
+  const labels = {
+    quota_warning: "Quota warning", quota_critical: "Quota critical", quota_exhausted: "Quota exhausted", quota_reset: "Quota reset confirmed",
+    reset_credit_increased: "Reset credit increased", reset_credit_decreased: "Reset credit decreased", provider_degraded: "Provider degraded",
+    provider_down: "Provider unavailable", provider_recovered: "Provider recovered", credential_blocked: "Credential blocked",
+    credential_disabled: "Credential disabled", credential_cooldown: "Credential cooling down", credential_recovered: "Credential recovered",
+    collector_failure: "Collector failure", collector_recovered: "Collector recovered", host_offline: "Fleet host offline", host_recovered: "Fleet host recovered",
+    agentrouter_large_balance_drop: "AgentRouter balance drop", agentrouter_balance_low: "AgentRouter balance low", agentrouter_grant_received: "AgentRouter grant received",
+    agentrouter_challenge_required: "AgentRouter challenge required", agentrouter_login_required: "AgentRouter login required", agentrouter_login_failed: "AgentRouter login failed",
+    agentrouter_endpoint_failed: "AgentRouter endpoint failed", session_context_warning: "Session context warning", session_context_critical: "Session context critical",
+    session_failed: "Session failed", session_started: "Session started", session_closed: "Session closed", digest_ready: "Notification digest ready",
+    policy_changed: "Notification policy changed", import_completed: "Import completed",
+  };
+  const context = [];
+  if (item?.provider) context.push(safeLabel(item.provider));
+  if (item?.meter) context.push(safeLabel(item.meter));
+  else if (item?.model) context.push(safeLabel(item.model));
+  if (item?.windowId) context.push(maskedIdentifier(item.windowId, "Window"));
+  else if (item?.sessionId) context.push(maskedIdentifier(item.sessionId, "Session"));
+  else if (item?.hostId) context.push(maskedIdentifier(item.hostId, "Host"));
+  else if (item?.identityId) context.push(maskedIdentifier(item.identityId, "Identity"));
+  return { type, title: labels[type] || "Observatory state changed", detail: context.length ? context.join(" · ") : "Public event details unavailable" };
+}
+
+function renderEvents() {
+  const events = listFrom(eventPayload(), ["events"]);
+  const body = byId("events-body");
+  body.replaceChildren();
+  const filter = byId("event-severity-filter").value;
+  const filtered = events.filter((item) => filter === "all" || item.severity === filter);
+  for (const item of filtered) {
+    const row = element("tr");
+    const presentation = eventPresentation(item);
+    const severity = element("td"); severity.append(statusBadge(item.severity, "info"));
+    const source = element("td", "meta-cell"); source.append(metadataBadges(item, "Observatory event bus", item.hostId ? "Host" : "Fleet"));
+    const message = element("td", "wrap-cell"); message.append(element("strong", null, presentation.title), element("div", "muted", presentation.detail));
+    row.append(element("td", null, valueOrUnavailable(item.occurredAt, (value) => formatDate(value, true))), severity, element("td", null, presentation.type.replaceAll("_", " ")), source, message, element("td", "identity-safe-id", maskedIdentifier(item.eventId || item.fingerprint, "Event")));
+    body.append(row);
+  }
+  if (!filtered.length) { const row = element("tr"); const cell = element("td", "muted", state.observatoryErrors.has("events") ? "Event telemetry is unavailable or unsupported." : "No matching observatory events."); cell.colSpan = 6; row.append(cell); body.append(row); }
+
+  const auditBody = byId("audit-body"); auditBody.replaceChildren();
+  const audit = listFrom(eventPayload(), ["audit", "auditEntries"]);
+  for (const item of audit) {
+    const detailCount = Object.keys(item.details || {}).length;
+    const details = element("td", "meta-cell", detailCount ? `${formatNumber(detailCount)} protected detail field${detailCount === 1 ? "" : "s"}` : "No public details");
+    const row = element("tr");
+    auditBody.append(row);
+    const actor = /^(system|dashboard_owner|collector|scheduler)$/i.test(String(item.actor || "")) ? safeLabel(item.actor, "System") : maskedIdentifier(item.actor, "Actor");
+    row.append(element("td", null, valueOrUnavailable(item.occurredAt, (value) => formatDate(value, true))), element("td", null, actor), element("td", null, safeLabel(item.action, "Observed").replaceAll("_", " ")), element("td", null, safeLabel(item.targetType, "Unknown")), element("td", "identity-safe-id", maskedIdentifier(item.targetId, "Target")), details);
+  }
+  if (!audit.length) { const row = element("tr"); const cell = element("td", "muted", "No audit entries are available for this observation window."); cell.colSpan = 6; row.append(cell); auditBody.append(row); }
+
+  const deliveries = listFrom(state.observatory.policies, ["deliveries", "notificationDeliveries"]);
+  const deliveryBody = byId("deliveries-body"); deliveryBody.replaceChildren();
+  for (const item of deliveries) {
+    const status = element("td"); status.append(statusBadge(item.status));
+    const row = element("tr");
+    deliveryBody.append(row);
+    const deliveryDetail = item.errorCategory ? safeLabel(item.errorCategory, "Delivery failed").replaceAll("_", " ") : item.status === "sent" ? "Delivered" : "No public details";
+    row.append(element("td", "identity-safe-id", maskedIdentifier(item.eventId, "Event")), element("td", null, safeLabel(item.channel, "Unknown")), status, element("td", null, valueOrUnavailable(item.attemptCount, formatNumber)), element("td", null, valueOrUnavailable(item.sentAt || item.lastAttemptAt, (value) => formatDate(value, true))), element("td", "wrap-cell", deliveryDetail));
+  }
+  if (!deliveries.length) { const row = element("tr"); const cell = element("td", "muted", "No notification delivery records are available."); cell.colSpan = 6; row.append(cell); deliveryBody.append(row); }
+}
+
+function renderHealthView() {
+  const payload = state.observatory.health;
+  const summary = byId("health-summary-metrics");
+  const data = payload?.health || payload || {};
+  const generatedAt = data.generatedAt || data.observedAt;
+  summary.replaceChildren(
+    metricCard("Overall status", state.observatoryErrors.has("health") ? "Unavailable" : safeLabel(data.status, "Unknown"), state.observatoryErrors.has("health") ? "Health endpoint unsupported" : generatedAt ? `Observed ${formatRelative(generatedAt)}` : "Observation age unavailable", data.status === "ok" || data.status === "healthy" ? PALETTE[5] : PALETTE[6]),
+    metricCard("Uptime", data.uptimeSeconds === null || data.uptimeSeconds === undefined ? "Unavailable" : formatDuration(Number(data.uptimeSeconds) * 1000), "Server process uptime", PALETTE[4]),
+    metricCard("SSE stream", state.sseSource && state.sseConnectedAt ? "Live" : "Fallback", state.sseLastMessageAt ? `Last event ${formatRelative(state.sseLastMessageAt)}` : "No stream event observed", PALETTE[0]),
+    metricCard("Scheduler", data.schedulerActive === undefined ? "Unavailable" : data.schedulerActive ? "Active" : "Paused", "Automation coordinator", PALETTE[1]),
+  );
+  const services = byId("services-health-container"); services.replaceChildren();
+  const serviceItems = listFrom(data, ["services", "components"]);
+  const defaults = serviceItems.length ? serviceItems : [
+    { name: "Observatory API", status: state.observatoryErrors.has("health") ? "unavailable" : data.status || "unknown", message: state.observatoryErrors.has("health") ? "Endpoint unavailable" : "Health endpoint response" },
+    { name: "Event stream", status: state.sseSource && state.sseConnectedAt ? "online" : "degraded", message: state.sseSource ? "SSE reconnecting" : "Polling fallback active" },
+    { name: "AgentRouter coordinator", status: state.coordinator?.running ? "active" : state.coordinator?.lastCycleError ? "degraded" : "online", message: state.coordinator?.running ? "Collection cycle running" : "Coordinator ready" },
+  ];
+  for (const item of defaults) {
+    const row = element("div", "service-health-row"); const copy = element("div"); const serviceStatus = safeLabel(item.status, "unknown").replaceAll("_", " "); copy.append(element("strong", null, safeLabel(item.name || item.label, "Service")), element("p", null, `${serviceStatus} service state reported.`)); row.append(copy, statusBadge(item.status)); services.append(row);
+  }
+  const stream = byId("stream-telemetry-container"); stream.replaceChildren();
+  for (const [label, value] of [["Connection mode", state.sseConnectedAt ? "Server-Sent Events" : "Bounded polling fallback"], ["Last event", state.sseLastMessageAt ? formatDate(state.sseLastMessageAt, true) : "Unavailable"], ["Reconnect attempt", formatNumber(state.sseRetryCount)], ["Last Event ID", state.sseLastEventId ? maskedIdentifier(state.sseLastEventId, "Event") : "Unavailable"]]) {
+    const cell = element("div", "telemetry-cell"); cell.append(element("span", null, label), element("strong", null, value)); stream.append(cell);
+  }
+  const storage = byId("storage-telemetry-container"); storage.replaceChildren();
+  const storageData = data.storage || data.database || {};
+  const publicPairs = Object.entries(storageData).filter(([, value]) => typeof value === "number" || typeof value === "boolean").slice(0, 10);
+  const pairs = publicPairs.length ? publicPairs : [["Retention state", "Unavailable"], ["Database status", "Unavailable"]];
+  for (const [key, value] of pairs) { const cell = element("div", "telemetry-cell"); cell.append(element("span", null, safeLabel(key)), element("strong", null, valueOrUnavailable(value, String))); storage.append(cell); }
+}
+
+function renderAccountsRoster() {
+  const container = byId("accounts-roster-cards"); container.replaceChildren();
+  if (!state.accounts.length) { container.append(stateCard("empty", "No AgentRouter accounts", "Add an account to begin protected browser collection.")); return; }
+  const historical = new Map(state.historicalAccounts.map((item) => [item.accountId, item]));
+  for (const account of state.accounts) {
+    const item = historical.get(account.id);
+    const card = element("article", "account-roster-card");
+    const heading = element("div", "entity-heading"); const copy = element("div"); copy.append(element("h3", null, safeLabel(account.label)), element("p", null, `GitHub · ${safeLabel(account.githubUsername)}`)); heading.append(copy, statusBadge(item?.lastStatus || (account.enabled ? "active" : "paused")));
+    const stats = element("div", "entity-stats");
+    const last = element("div", "entity-stat"); last.append(element("span", null, "Last check"), element("strong", null, item?.lastRunAt ? formatRelative(item.lastRunAt) : "No data"));
+    const token = element("div", "entity-stat"); token.append(element("span", null, "API access"), element("strong", null, account.hasApiToken ? "Captured" : "Pending")); stats.append(last, token);
+    const open = element("button", "button ghost", "Open account observatory"); open.type = "button"; open.addEventListener("click", () => selectAccount(account.id));
+    card.append(heading, stats, open); container.append(card);
+  }
+}
+
+function renderActiveView() {
+  if (state.activeView === "overview") { renderObservatoryOverview(); renderOverview(); }
+  else if (state.activeView === "quotas") renderQuotas();
+  else if (state.activeView === "credentials") renderCredentials();
+  else if (state.activeView === "accounts") renderAccountsRoster();
+  else if (state.activeView === "sessions") renderSessions();
+  else if (state.activeView === "hosts") renderHosts();
+  else if (state.activeView === "notifications") { renderPolicies(); renderEvents(); }
+  else if (state.activeView === "events") renderEvents();
+  else if (state.activeView === "health") renderHealthView();
+}
+
+async function loadObservatory() {
+  const entries = [
+    ["overview", "/api/observatory/overview"], ["quotas", "/api/observatory/quotas"], ["identities", "/api/observatory/identities"],
+    ["hosts", "/api/observatory/hosts"], ["sessions", "/api/observatory/sessions"], ["events", "/api/observatory/events"],
+    ["policies", "/api/observatory/policies"], ["health", "/api/observatory/health"],
+  ];
+  const values = await Promise.all(entries.map(([name, path]) => optionalApi(name, path)));
+  entries.forEach(([name], index) => { if (values[index] !== null) state.observatory[name] = values[index]; });
+  renderActiveView();
+}
+
+function updateSseStatus(mode) {
+  const chip = byId("sse-state");
+  const labels = { live: "Live stream", connecting: "Connecting", reconnecting: "Reconnecting", polling: "Polling fallback", offline: "Offline" };
+  chip.className = `status-chip ${mode === "live" ? "ok" : mode === "reconnecting" ? "warning" : mode === "offline" ? "error" : "neutral"}`;
+  chip.replaceChildren(element("i"), element("span", null, labels[mode] || "Stream unavailable"));
+}
+
+function parseStreamData(event) {
+  if (typeof event.data !== "string" || event.data.length > 65_536) return null;
+  try { const data = JSON.parse(event.data); return data && typeof data === "object" && !Array.isArray(data) ? data : null; } catch { return null; }
+}
+
+const OBSERVATORY_EVENT_TYPES = [
+  "quota_warning", "quota_critical", "quota_exhausted", "quota_reset", "reset_credit_increased", "reset_credit_decreased",
+  "provider_degraded", "provider_down", "provider_recovered", "credential_blocked", "credential_disabled", "credential_cooldown", "credential_recovered",
+  "collector_failure", "collector_recovered", "host_offline", "host_recovered", "agentrouter_large_balance_drop", "agentrouter_balance_low",
+  "agentrouter_grant_received", "agentrouter_challenge_required", "agentrouter_login_required", "agentrouter_login_failed", "agentrouter_endpoint_failed",
+  "session_context_warning", "session_context_critical", "session_failed", "session_started", "session_closed", "digest_ready", "policy_changed", "import_completed",
+];
+
+function eventRefreshFamilies(type) {
+  if (/^quota_|^reset_credit_/.test(type)) return ["overview", "quotas", "events"];
+  if (/^provider_|^credential_/.test(type)) return ["overview", "identities", "events"];
+  if (/^collector_|^host_/.test(type)) return ["overview", "hosts", "health", "events"];
+  if (/^session_/.test(type)) return ["overview", "sessions", "events"];
+  if (/^agentrouter_/.test(type)) return ["overview", "events"];
+  if (/policy|digest/.test(type)) return ["policies", "events"];
+  return ["overview", "quotas", "identities", "hosts", "sessions", "events", "policies", "health"];
+}
+
+async function refreshObservatoryFamilies(families) {
+  const endpoints = { overview: "/api/observatory/overview", quotas: "/api/observatory/quotas", identities: "/api/observatory/identities", hosts: "/api/observatory/hosts", sessions: "/api/observatory/sessions", events: "/api/observatory/events", policies: "/api/observatory/policies", health: "/api/observatory/health" };
+  const names = [...new Set(families)].filter((name) => endpoints[name]);
+  const values = await Promise.all(names.map((name) => optionalApi(name, endpoints[name])));
+  names.forEach((name, index) => { if (values[index] !== null) state.observatory[name] = values[index]; });
+  renderActiveView();
+}
+
+function scheduleObservatoryRefresh(families = Object.keys(state.observatory), delay = 30_000) {
+  for (const family of families) state.pendingRefreshFamilies.add(family);
+  clearTimeout(state.fallbackTimer);
+  state.fallbackTimer = setTimeout(async () => {
+    if (state.fallbackInFlight) { scheduleObservatoryRefresh([], 1_000); return; }
+    const pending = state.pendingRefreshFamilies.size ? [...state.pendingRefreshFamilies] : Object.keys(state.observatory);
+    state.pendingRefreshFamilies.clear(); state.fallbackInFlight = true;
+    try { await refreshObservatoryFamilies(pending); }
+    finally { state.fallbackInFlight = false; scheduleObservatoryRefresh([], 30_000); }
+  }, Math.max(0, Math.min(delay, 30_000)));
+}
+
+function handleStreamEvent(event) {
+  const data = parseStreamData(event);
+  if (!data) return;
+  if (event.lastEventId) state.sseLastEventId = event.lastEventId;
+  else if (typeof data.eventId === "string") state.sseLastEventId = data.eventId;
+  state.sseLastMessageAt = new Date().toISOString();
+  const type = safeLabel(data.eventType || data.type || event.type, "observatory_event").toLowerCase().replaceAll("-", "_");
+  const durable = Boolean(data.eventId || event.lastEventId) && data.ephemeral !== true;
+  if (["quota_reset", "confirmed_reset"].includes(type) && durable) runCelebration(false, type === "quota_reset" ? eventPresentation(data).title : "Quota reset confirmed");
+  scheduleObservatoryRefresh(eventRefreshFamilies(type), 250);
+  if (state.activeView === "health") renderHealthView();
+}
+
+function scheduleSseReconnect() {
+  clearTimeout(state.sseRetryTimer); state.sseRetryCount += 1;
+  state.sseRetryTimer = setTimeout(connectObservatoryStream, Math.min(30_000, 1_000 * (2 ** Math.min(state.sseRetryCount, 5))));
+}
+
+function connectObservatoryStream() {
+  clearTimeout(state.sseRetryTimer);
+  if (state.sseSource) state.sseSource.close();
+  state.sseSource = null;
+  if (typeof EventSource === "undefined") { updateSseStatus("polling"); scheduleObservatoryRefresh([], 0); return; }
+  updateSseStatus(state.sseRetryCount ? "reconnecting" : "connecting");
+  const url = dashboardUrl("api/observatory/stream");
+  if (state.sseLastEventId) url.searchParams.set("lastEventId", state.sseLastEventId);
+  const source = new EventSource(url.toString(), { withCredentials: true }); state.sseSource = source;
+  source.onopen = () => { if (state.sseSource !== source) return; state.sseConnectedAt = new Date().toISOString(); state.sseRetryCount = 0; updateSseStatus("live"); scheduleObservatoryRefresh([], 30_000); };
+  source.onmessage = handleStreamEvent;
+  for (const type of [...OBSERVATORY_EVENT_TYPES, "confirmed_reset", "confirmed-reset"]) source.addEventListener(type, handleStreamEvent);
+  source.onerror = () => { if (state.sseSource !== source) return; source.close(); state.sseSource = null; state.sseConnectedAt = null; updateSseStatus("reconnecting"); scheduleObservatoryRefresh([], 0); scheduleSseReconnect(); };
+}
+
+function loadCelebrationSettings() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem("ai-fleet-celebration") || "null");
+    const effect = ["fireworks", "confetti", "aurora", "spark", "random", "off"].includes(parsed?.effect) ? parsed.effect : "fireworks";
+    const duration = ["short", "medium", "long"].includes(parsed?.duration) ? parsed.duration : "short";
+    const intensity = ["low", "medium", "high"].includes(parsed?.intensity) ? parsed.intensity : "low";
+    state.celebrationSettings = { effect, duration, intensity };
+  } catch { state.celebrationSettings = { effect: "fireworks", duration: "short", intensity: "low" }; }
+}
+
+function hydrateCelebrationControls() {
+  byId("celebration-effect").value = state.celebrationSettings.effect; byId("celebration-duration").value = state.celebrationSettings.duration; byId("celebration-intensity").value = state.celebrationSettings.intensity;
+}
+
+function celebrationDraftFromControls() {
+  return { effect: byId("celebration-effect").value, duration: byId("celebration-duration").value, intensity: byId("celebration-intensity").value };
+}
+
+function persistCelebrationSettings(settings = celebrationDraftFromControls()) {
+  state.celebrationSettings = settings;
+  try { localStorage.setItem("ai-fleet-celebration", JSON.stringify(settings)); } catch { /* Storage can be disabled. */ }
+}
+function runCelebration(preview = false, message = "Quota reset confirmed") {
+  const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const settings = preview && byId("settings-dialog").open ? celebrationDraftFromControls() : state.celebrationSettings;
+  if (settings.effect === "off") { if (preview) showToast("Celebrations are disabled."); return; }
+  if (reduced) { showToast(`${message}. Animation skipped for reduced motion.`); return; }
+  cancelAnimationFrame(state.celebrationFrame);
+  const canvas = byId("celebration-canvas"); const context = canvas.getContext("2d");
+  const dpr = Math.min(devicePixelRatio || 1, 2); canvas.width = Math.round(innerWidth * dpr); canvas.height = Math.round(innerHeight * dpr); context.setTransform(dpr, 0, 0, dpr, 0, 0); canvas.classList.add("active");
+  const effects = ["fireworks", "confetti", "aurora", "spark"]; const effect = settings.effect === "random" ? effects[Math.floor(Math.random() * effects.length)] : settings.effect;
+  const duration = { short: 2_000, medium: 4_000, long: 6_000 }[settings.duration] || 2_000; const count = { low: 36, medium: 72, high: 126 }[settings.intensity] || 36;
+  const colors = ["#a855f7", "#d946ef", "#67e8f9", "#6ee7b7", "#fbbf24", "#f472b6"];
+  const particles = Array.from({ length: count }, (_, index) => { const angle = Math.random() * Math.PI * 2; const speed = 1.5 + Math.random() * 5; return { x: effect === "fireworks" || effect === "spark" ? innerWidth * (.2 + Math.random() * .6) : Math.random() * innerWidth, y: effect === "confetti" ? -Math.random() * innerHeight : innerHeight * (.25 + Math.random() * .45), vx: Math.cos(angle) * speed, vy: effect === "confetti" ? 1 + Math.random() * 3 : Math.sin(angle) * speed, size: 2 + Math.random() * 5, color: colors[index % colors.length], phase: Math.random() * Math.PI * 2 }; });
+  const started = performance.now();
+  const frame = (now) => {
+    const elapsed = now - started; const progress = elapsed / duration; context.clearRect(0, 0, innerWidth, innerHeight);
+    if (effect === "aurora") { context.globalAlpha = Math.sin(Math.min(1, progress) * Math.PI) * .26; for (let band = 0; band < 4; band += 1) { const gradient = context.createLinearGradient(0, 0, innerWidth, innerHeight); gradient.addColorStop(0, colors[band]); gradient.addColorStop(1, colors[band + 2]); context.strokeStyle = gradient; context.lineWidth = 55; context.beginPath(); for (let x = -40; x <= innerWidth + 40; x += 30) { const y = innerHeight * (.25 + band * .14) + Math.sin(x * .009 + now * .0015 + band) * 70; if (x === -40) context.moveTo(x, y); else context.lineTo(x, y); } context.stroke(); } }
+    else { context.globalAlpha = Math.max(0, 1 - progress); for (const particle of particles) { particle.x += particle.vx; particle.y += particle.vy; particle.vy += effect === "confetti" ? .015 : .035; particle.phase += .12; context.fillStyle = particle.color; context.save(); context.translate(particle.x, particle.y); context.rotate(particle.phase); if (effect === "confetti") context.fillRect(-particle.size, -particle.size / 2, particle.size * 2.2, particle.size); else { context.beginPath(); context.arc(0, 0, particle.size * (1 - progress * .5), 0, Math.PI * 2); context.fill(); } context.restore(); } }
+    if (elapsed < duration) state.celebrationFrame = requestAnimationFrame(frame); else { context.clearRect(0, 0, innerWidth, innerHeight); canvas.classList.remove("active"); }
+  };
+  state.celebrationFrame = requestAnimationFrame(frame); showToast(preview ? `Previewing ${effect} celebration.` : message);
+}
+
+function focusableIn(dialog) {
+  return [...dialog.querySelectorAll('button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])')].filter((node) => !node.closest(".hidden"));
+}
+
+function showModal(dialog, focusTarget) {
+  state.previousFocus.set(dialog, document.activeElement);
+  dialog.showModal(); requestAnimationFrame(() => (focusTarget || focusableIn(dialog)[0])?.focus());
+}
+
+function closeModal(dialog) {
+  if (dialog.open) dialog.close();
+  const previous = state.previousFocus.get(dialog); if (previous?.isConnected) previous.focus();
+}
+
+function bindDialogFocus(dialog) {
+  dialog.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") { event.preventDefault(); closeModal(dialog); return; }
+    if (event.key !== "Tab") return;
+    const focusable = focusableIn(dialog); if (!focusable.length) return;
+    const first = focusable[0]; const last = focusable.at(-1);
+    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+  });
+  dialog.addEventListener("close", () => { const previous = state.previousFocus.get(dialog); if (previous?.isConnected) previous.focus(); });
+}
+
+function updatePolicyTargetField() {
+  const scope = byId("policy-scope-type").value;
+  const editing = Boolean(state.policyEditingTarget);
+  byId("policy-scope-type").disabled = editing;
+  byId("policy-target").disabled = editing || scope === "global";
+  byId("policy-target").required = scope !== "global";
+  if (scope === "global" && !editing) byId("policy-target").value = "";
+}
+
+function openPolicyDialog(rule = null) {
+  const parsed = parsePolicyTargetClient(rule?.target || "provider:");
+  const policy = rule || resolvePolicy("global").resolved;
+  state.policyEditingTarget = rule?.target || null;
+  state.policyEditingRule = rule ? { ...rule, thresholds: { ...(rule.thresholds || {}) } } : null;
+  const targetDisplay = rule ? (["provider", "event"].includes(parsed.scopeType) ? parsed.scopeKey : parsed.scopeType === "global" ? "" : maskedIdentifier(parsed.scopeKey, "Target")) : "";
+  byId("policy-id").value = rule?.policyId || ""; byId("policy-scope-type").value = rule ? parsed.scopeType : "provider"; byId("policy-target").value = targetDisplay; byId("policy-min-severity").value = policy.minSeverity || "warning";
+  const thresholds = { ...defaultPolicy().thresholds, ...(policy.thresholds || {}) };
+  byId("policy-cooldown").value = String(policy.cooldownMinutes ?? 15); byId("policy-warning-threshold").value = String(Math.round((1 - thresholds.warningRemainingFraction) * 100)); byId("policy-critical-threshold").value = String(Math.round((1 - thresholds.criticalRemainingFraction) * 100)); byId("policy-channels").value = (policy.channels || ["default"]).join(", ");
+  byId("policy-quiet-tz").value = policy.quietHoursTimezone || "UTC"; byId("policy-quiet-start").value = policy.quietHoursStart || ""; byId("policy-quiet-end").value = policy.quietHoursEnd || ""; byId("policy-silenced").checked = Boolean(policy.silenced); byId("policy-quiet-enabled").checked = Boolean(policy.quietHoursEnabled); byId("policy-critical-bypass").checked = policy.criticalBypassQuietHours !== false; byId("policy-error").textContent = "";
+  updatePolicyTargetField(); renderPolicyDialogPreview(); showModal(byId("policy-dialog"), rule ? byId("policy-min-severity") : byId("policy-scope-type"));
+}
+
+function draftPolicy() {
+  const scopeType = byId("policy-scope-type").value;
+  const target = state.policyEditingTarget || canonicalPolicyTarget(scopeType, byId("policy-target").value);
+  const warningUtilization = Number(byId("policy-warning-threshold").value) / 100;
+  const criticalUtilization = Number(byId("policy-critical-threshold").value) / 100;
+  const base = state.policyEditingRule || resolvePolicy(target || "global").resolved;
+  return {
+    target, warningUtilization, criticalUtilization, base,
+    changes: {
+      silenced: byId("policy-silenced").checked, minSeverity: byId("policy-min-severity").value,
+      cooldownMinutes: Number(byId("policy-cooldown").value), channels: byId("policy-channels").value.split(",").map((value) => value.trim()).filter(Boolean),
+      quietHoursEnabled: byId("policy-quiet-enabled").checked, quietHoursTimezone: byId("policy-quiet-tz").value.trim(), quietHoursStart: byId("policy-quiet-start").value || null,
+      quietHoursEnd: byId("policy-quiet-end").value || null, criticalBypassQuietHours: byId("policy-critical-bypass").checked,
+      thresholds: { ...defaultPolicy().thresholds, ...(base.thresholds || {}), warningRemainingFraction: 1 - warningUtilization, criticalRemainingFraction: 1 - criticalUtilization },
+    },
+  };
+}
+
+function canonicalPolicyRuleDto(draft) {
+  const merged = { ...defaultPolicy(), ...draft.base, ...draft.changes, target: draft.target };
+  const thresholds = { ...defaultPolicy().thresholds, ...(draft.base.thresholds || {}), ...(draft.changes.thresholds || {}) };
+  const rule = {
+    target: draft.target, enabled: merged.enabled, silenced: merged.silenced, telegramImmediate: merged.telegramImmediate, dashboardOnly: merged.dashboardOnly,
+    minSeverity: merged.minSeverity, cooldownMinutes: merged.cooldownMinutes, throttleIntervalMs: merged.throttleIntervalMs, channels: merged.channels,
+    recipient: merged.recipient, quietHoursEnabled: merged.quietHoursEnabled, quietHoursTimezone: merged.quietHoursTimezone, quietHoursStart: merged.quietHoursStart,
+    quietHoursEnd: merged.quietHoursEnd, criticalBypassQuietHours: merged.criticalBypassQuietHours, digestEnabled: merged.digestEnabled,
+    digestSchedule: merged.digestSchedule, digestTimezone: merged.digestTimezone, matchEventTypes: merged.matchEventTypes, matchHostIds: merged.matchHostIds,
+    matchIdentityIds: merged.matchIdentityIds, warningRemainingFraction: thresholds.warningRemainingFraction, criticalRemainingFraction: thresholds.criticalRemainingFraction,
+    exhaustedRemainingFraction: thresholds.exhaustedRemainingFraction, hysteresisFraction: thresholds.hysteresisFraction, consecutiveFailuresThreshold: merged.consecutiveFailuresThreshold,
+  };
+  return Object.fromEntries(Object.entries(rule).filter(([, value]) => value !== undefined));
+}
+
+function renderPolicyDialogPreview() {
+  const draft = draftPolicy();
+  renderEffectivePreview(byId("policy-dialog-effective-preview"), { resolved: { ...draft.base, ...draft.changes }, overridden: new Set(Object.keys(draft.changes)) });
+}
+
+async function savePolicy(event) {
+  event.preventDefault(); const draft = draftPolicy();
+  if (!draft.target || draft.target.length > 160 || !draft.changes.channels.length) { byId("policy-error").textContent = "A canonical target and at least one delivery channel are required."; return; }
+  if (!(draft.warningUtilization > 0 && draft.warningUtilization <= draft.criticalUtilization && draft.criticalUtilization <= 1)) { byId("policy-error").textContent = "Utilization thresholds must be ordered between 1% and 100%."; return; }
+  try {
+    await api("/api/observatory/policies", { method: "PUT", body: { policy: canonicalPolicyRuleDto(draft) } });
+    state.observatory.policies = await api("/api/observatory/policies"); closeModal(byId("policy-dialog")); state.policyEditingTarget = null; state.policyEditingRule = null; showToast("Notification policy saved."); renderPolicies();
+  } catch (error) { byId("policy-error").textContent = error.message; }
+}
+
+function setActiveViewNavigation(name) {
+  document.querySelectorAll(".views-nav [data-view]").forEach((button) => {
+    const active = button.dataset.view === name;
+    button.classList.toggle("active", active);
+    if (active) {
+      button.setAttribute("aria-current", "page");
+    } else {
+      button.removeAttribute("aria-current");
+    }
+  });
+}
+
+function showView(name, options = {}) {
+  const valid = new Set(["overview", "quotas", "credentials", "accounts", "sessions", "hosts", "notifications", "events", "health"]);
+  if (!valid.has(name)) name = "overview";
   if (state.selectedId !== null) state.revealedTokens.clear();
   state.selectedId = null;
-  destroyCharts(ACCOUNT_CHARTS);
-  byId("overview-view").classList.remove("hidden");
+  state.activeView = name;
+  state.viewRequest += 1;
+  destroyCharts([...OVERVIEW_CHARTS, ...ACCOUNT_CHARTS]);
+  document.querySelectorAll(".view-panel").forEach((panel) => panel.classList.toggle("hidden", panel.id !== `${name}-view`));
   byId("account-view").classList.add("hidden");
-  renderAccounts(); renderOverview();
-  window.scrollTo({ top: 0, behavior: "smooth" });
+  renderAccounts();
+  setActiveViewNavigation(name);
+  renderActiveView();
+  renderTraceArchive();
+  if (!options.preserveScroll) window.scrollTo({ top: 0, behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+}
+
+function showOverview() {
+  showView("overview");
 }
 
 async function selectAccount(id) {
   if (state.selectedId !== id) state.revealedTokens.clear();
   state.selectedId = id;
+  state.activeView = "accounts";
+  state.viewRequest += 1;
   destroyCharts(OVERVIEW_CHARTS);
-  byId("overview-view").classList.add("hidden");
+  document.querySelectorAll(".view-panel").forEach((panel) => panel.classList.add("hidden"));
   byId("account-view").classList.remove("hidden");
+  setActiveViewNavigation("accounts");
   renderAccounts();
+  const request = state.viewRequest;
   try {
     const granularity = byId("usage-granularity").value;
     const [history, runs, usage, activity, credits, endpointObservations] = await Promise.all([
       api(`/api/history/${encodeURIComponent(id)}?limit=1000`), api(`/api/runs?accountId=${encodeURIComponent(id)}&limit=200`), api(`/api/usage/${encodeURIComponent(id)}?granularity=${encodeURIComponent(granularity)}`), api(`/api/activity/${encodeURIComponent(id)}`), api(`/api/credits/${encodeURIComponent(id)}?limit=1000`), api(`/api/endpoint-observations/${encodeURIComponent(id)}?limit=5000`),
     ]);
-    if (state.selectedId !== id) return;
+    if (state.selectedId !== id || state.viewRequest !== request) return;
     const grants = state.overview?.accounts?.find((item) => item.account.id === id)?.grants || [];
     Object.assign(state, { history, runs, usage, activity, credits, grants, endpointObservations });
     renderAccount();
-    window.scrollTo({ top: 0, behavior: "smooth" });
+    window.scrollTo({ top: 0, behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
   } catch (error) { showToast(error.message, true); }
 }
 
@@ -914,10 +1787,10 @@ async function loadCore(refreshView = true) {
   state.accounts = bootstrap.accounts; state.historicalAccounts = bootstrap.historicalAccounts; state.settings = bootstrap.settings; state.coordinator = bootstrap.coordinator; state.challenges = bootstrap.challenges || []; state.overview = overview;
   const automation = state.settings.automation;
   byId("schedule-label").textContent = automation.schedulerEnabled ? `Every ${automation.intervalMinutes} min · ${automation.accountDelaySeconds}s gap` : "Paused";
-  byId("account-file").textContent = state.settings.accountFilePath;
+  byId("account-file").textContent = "Protected local vault";
   renderAccounts(); renderCoordinator(); renderChallenges();
   if (refreshView && state.selectedId && state.accounts.some((account) => account.id === state.selectedId)) await selectAccount(state.selectedId);
-  else showOverview();
+  else showView(state.activeView || "overview", { preserveScroll: true });
 }
 
 async function runChecks(accountId) {
@@ -939,27 +1812,28 @@ async function stopChecks() {
 function openAccountDialog(account = null) {
   byId("dialog-title").textContent = account ? "Edit account" : "Add account";
   byId("account-id").value = account?.id || ""; byId("github-username").value = account?.githubUsername || ""; byId("account-label").value = account?.label || ""; byId("github-password").value = ""; byId("github-password").required = !account; byId("password-help").textContent = account ? "Leave blank to keep the saved password." : "Required for a new account."; byId("account-enabled").checked = account?.enabled ?? true; byId("account-run-order").value = String(account?.runOrder ?? state.accounts.length); byId("form-error").textContent = "";
-  byId("account-dialog").showModal(); byId("github-username").focus();
+  showModal(byId("account-dialog"), byId("github-username"));
 }
 
 async function saveAccount(event) {
   event.preventDefault();
   try {
     const result = await api("/api/accounts", { method: "POST", body: { id: byId("account-id").value || undefined, githubUsername: byId("github-username").value, label: byId("account-label").value, githubPassword: byId("github-password").value, enabled: byId("account-enabled").checked, runOrder: Number(byId("account-run-order").value) } });
-    byId("account-dialog").close(); state.selectedId = result.account.id; showToast("Account saved in the protected local credential file."); await loadCore(true);
+    closeModal(byId("account-dialog")); state.selectedId = result.account.id; showToast("Account saved in the protected local credential file."); await loadCore(true);
   } catch (error) { byId("form-error").textContent = error.message; }
 }
 
 function openSettingsDialog() {
   const automation = state.settings?.automation; if (!automation) return;
-  byId("interval-minutes").value = automation.intervalMinutes; byId("endpoint-poll-interval").value = automation.endpointPollIntervalMinutes; byId("account-delay-seconds").value = automation.accountDelaySeconds; byId("two-factor-timeout").value = automation.twoFactorTimeoutMinutes; byId("activity-lookback").value = automation.activityLookbackDays; byId("scheduler-enabled").checked = automation.schedulerEnabled; byId("endpoint-polling-enabled").checked = automation.endpointPollingEnabled; byId("run-on-start").checked = automation.runOnStart; byId("open-on-start").checked = automation.openDashboardOnStart; byId("capture-screenshots").checked = automation.captureScreenshots; byId("settings-error").textContent = ""; byId("settings-dialog").showModal();
+  byId("interval-minutes").value = automation.intervalMinutes; byId("endpoint-poll-interval").value = automation.endpointPollIntervalMinutes; byId("account-delay-seconds").value = automation.accountDelaySeconds; byId("two-factor-timeout").value = automation.twoFactorTimeoutMinutes; byId("activity-lookback").value = automation.activityLookbackDays; byId("scheduler-enabled").checked = automation.schedulerEnabled; byId("endpoint-polling-enabled").checked = automation.endpointPollingEnabled; byId("run-on-start").checked = automation.runOnStart; byId("open-on-start").checked = automation.openDashboardOnStart; byId("capture-screenshots").checked = automation.captureScreenshots; hydrateCelebrationControls(); byId("settings-error").textContent = ""; showModal(byId("settings-dialog"), byId("interval-minutes"));
 }
 
 async function saveSettings(event) {
   event.preventDefault();
+  const celebrationDraft = celebrationDraftFromControls();
   try {
     const result = await api("/api/settings", { method: "PUT", body: { intervalMinutes: Number(byId("interval-minutes").value), endpointPollIntervalMinutes: Number(byId("endpoint-poll-interval").value), accountDelaySeconds: Number(byId("account-delay-seconds").value), twoFactorTimeoutMinutes: Number(byId("two-factor-timeout").value), activityLookbackDays: Number(byId("activity-lookback").value), schedulerEnabled: byId("scheduler-enabled").checked, endpointPollingEnabled: byId("endpoint-polling-enabled").checked, runOnStart: byId("run-on-start").checked, openDashboardOnStart: byId("open-on-start").checked, browserHeadless: state.settings.automation.browserHeadless, captureScreenshots: byId("capture-screenshots").checked } });
-    state.settings.automation = result.automation; byId("settings-dialog").close(); showToast("Automation settings saved."); await loadCore(false);
+    persistCelebrationSettings(celebrationDraft); state.settings.automation = result.automation; closeModal(byId("settings-dialog")); showToast("Automation and celebration settings saved."); await loadCore(false);
   } catch (error) { byId("settings-error").textContent = error.message; }
 }
 
@@ -1009,44 +1883,93 @@ function hideApiToken(id) {
   if (state.selectedId === id) renderAccount(); else renderOverviewTokenVault();
 }
 
+function activateTab(tab, focus = false) {
+  const list = tab.closest(".tab-list");
+  list.querySelectorAll('[role="tab"]').forEach((item) => {
+    const active = item === tab; item.classList.toggle("active", active); item.setAttribute("aria-selected", String(active)); item.tabIndex = active ? 0 : -1;
+    const panel = byId(item.getAttribute("aria-controls")); if (panel) { panel.classList.toggle("hidden", !active); panel.setAttribute("aria-labelledby", item.id); }
+  });
+  if (focus) tab.focus();
+}
+
+function initializeTabs() {
+  document.querySelectorAll(".tab-list").forEach((list, listIndex) => {
+    const tabs = [...list.querySelectorAll('[role="tab"]')];
+    tabs.forEach((tab, index) => { if (!tab.id) tab.id = `observatory-tab-${listIndex}-${index}`; });
+    activateTab(tabs.find((tab) => tab.getAttribute("aria-selected") === "true") || tabs[0]);
+  });
+}
+
+function handleTabKeydown(event) {
+  if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+  const tabs = [...event.currentTarget.closest(".tab-list").querySelectorAll('[role="tab"]')];
+  const index = tabs.indexOf(event.currentTarget); let next = index;
+  if (event.key === "Home") next = 0; else if (event.key === "End") next = tabs.length - 1; else next = (index + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
+  event.preventDefault(); activateTab(tabs[next], true);
+}
+
 function bindEvents() {
-  byId("brand-home").addEventListener("click", showOverview); byId("overview-nav").addEventListener("click", showOverview); byId("back-overview").addEventListener("click", showOverview);
-  for (const id of ["add-account", "rail-add", "onboarding-add"]) byId(id).addEventListener("click", () => openAccountDialog());
+  byId("brand-home").addEventListener("click", showOverview); byId("back-overview").addEventListener("click", showOverview);
+  document.querySelectorAll(".views-nav [data-view]").forEach((button) => button.addEventListener("click", () => showView(button.dataset.view)));
+  for (const id of ["add-account", "rail-add", "onboarding-add", "accounts-add-btn"]) byId(id).addEventListener("click", () => openAccountDialog());
+  byId("close-settings").addEventListener("click", () => { hydrateCelebrationControls(); closeModal(byId("settings-dialog")); }); byId("cancel-settings").addEventListener("click", () => { hydrateCelebrationControls(); closeModal(byId("settings-dialog")); }); byId("settings-dialog").addEventListener("close", hydrateCelebrationControls); byId("settings-form").addEventListener("submit", saveSettings);
   for (const id of ["open-settings", "hero-settings"]) byId(id).addEventListener("click", openSettingsDialog);
   for (const id of ["run-all", "hero-run"]) byId(id).addEventListener("click", () => runChecks());
   for (const id of ["stop-all", "challenge-stop"]) byId(id).addEventListener("click", stopChecks);
   byId("run-account").addEventListener("click", () => runChecks(state.selectedId)); byId("copy-api-token").addEventListener("click", copySelectedApiToken); byId("reveal-api-token").addEventListener("click", () => revealApiToken(state.selectedId)); byId("hide-api-token").addEventListener("click", () => hideApiToken(state.selectedId));
   byId("edit-account").addEventListener("click", () => openAccountDialog(selectedAccount())); byId("remove-account").addEventListener("click", removeSelectedAccount); byId("export-account").addEventListener("click", exportSelectedAccount);
-  byId("close-dialog").addEventListener("click", () => byId("account-dialog").close()); byId("cancel-dialog").addEventListener("click", () => byId("account-dialog").close()); byId("account-form").addEventListener("submit", saveAccount);
-  byId("close-settings").addEventListener("click", () => byId("settings-dialog").close()); byId("cancel-settings").addEventListener("click", () => byId("settings-dialog").close()); byId("settings-form").addEventListener("submit", saveSettings);
+  byId("close-dialog").addEventListener("click", () => closeModal(byId("account-dialog"))); byId("cancel-dialog").addEventListener("click", () => closeModal(byId("account-dialog"))); byId("account-form").addEventListener("submit", saveAccount);
+  byId("open-policy-editor-btn").addEventListener("click", () => openPolicyDialog()); byId("close-policy-dialog").addEventListener("click", () => { closeModal(byId("policy-dialog")); state.policyEditingTarget = null; state.policyEditingRule = null; }); byId("cancel-policy-dialog").addEventListener("click", () => { closeModal(byId("policy-dialog")); state.policyEditingTarget = null; state.policyEditingRule = null; }); byId("policy-form").addEventListener("submit", savePolicy);
+  byId("policy-preview-scope").addEventListener("change", renderPolicies);
+  byId("policy-scope-type").addEventListener("change", updatePolicyTargetField);
+  for (const id of ["policy-scope-type", "policy-target", "policy-min-severity", "policy-cooldown", "policy-warning-threshold", "policy-critical-threshold", "policy-channels", "policy-quiet-tz", "policy-quiet-start", "policy-quiet-end", "policy-silenced", "policy-quiet-enabled", "policy-critical-bypass"]) { byId(id).addEventListener("input", renderPolicyDialogPreview); byId(id).addEventListener("change", renderPolicyDialogPreview); }
   byId("toggle-console-size").addEventListener("click", () => { state.liveConsoleExpanded = !state.liveConsoleExpanded; renderCoordinator(); }); byId("close-inspector").addEventListener("click", () => byId("data-inspector").classList.add("hidden"));
   byId("dismiss-run").addEventListener("click", () => { const coordinator = state.coordinator || {}; state.liveConsoleDismissedKey = traceCycleKey(coordinator); clearLiveConsoleTimers(); byId("run-console").classList.add("hidden"); document.body.classList.remove("trace-active"); });
   byId("usage-granularity").addEventListener("change", () => state.selectedId && selectAccount(state.selectedId));
-  for (const tab of document.querySelectorAll(".data-tab")) tab.addEventListener("click", () => {
-    document.querySelectorAll(".data-tab").forEach((item) => {
-      const active = item === tab;
-      item.classList.toggle("active", active);
-      item.setAttribute("aria-selected", String(active));
-    });
-    byId("activity-tab").classList.toggle("hidden", tab.dataset.tab !== "activity");
-    byId("runs-tab").classList.toggle("hidden", tab.dataset.tab !== "runs");
+  for (const tab of document.querySelectorAll(".data-tab")) { tab.addEventListener("click", () => activateTab(tab)); tab.addEventListener("keydown", handleTabKeydown); }
+  for (const [id, render] of [["quota-provider-filter", renderQuotas], ["quota-status-filter", renderQuotas], ["credential-health-filter", renderCredentials], ["session-status-filter", renderSessions], ["host-status-filter", renderHosts], ["event-severity-filter", renderEvents]]) byId(id).addEventListener("change", render);
+  for (const [id, endpoint] of [["refresh-quotas-btn", "quotas"], ["refresh-credentials-btn", "identities"], ["refresh-sessions-btn", "sessions"], ["refresh-hosts-btn", "hosts"], ["refresh-events-btn", "events"], ["refresh-health-btn", "health"]]) byId(id).addEventListener("click", async () => {
+    const payload = await optionalApi(endpoint, `/api/observatory/${endpoint}`); if (payload !== null) state.observatory[endpoint] = payload; renderActiveView();
   });
+  for (const id of ["preview-celebration-btn", "test-celebration"]) byId(id).addEventListener("click", () => runCelebration(true));
+  for (const dialog of document.querySelectorAll("dialog")) bindDialogFocus(dialog);
+  const logoutBtn = byId("logout-btn");
+  if (logoutBtn) {
+    logoutBtn.addEventListener("click", async () => {
+      try {
+        await api("/api/auth/logout", { method: "POST" });
+      } finally {
+        window.location.replace(dashboardUrl("").toString());
+      }
+    });
+  }
+  byId("mobile-challenge").addEventListener("keydown", (event) => { if (event.key === "Tab") { event.preventDefault(); byId("challenge-stop").focus(); } });
+  window.addEventListener("pagehide", () => { clearTimeout(state.refreshTimer); clearTimeout(state.fallbackTimer); clearTimeout(state.sseRetryTimer); if (state.sseSource) state.sseSource.close(); destroyCharts([...OVERVIEW_CHARTS, ...ACCOUNT_CHARTS]); });
 }
 
 async function refresh() {
+  clearTimeout(state.refreshTimer);
+  if (state.refreshInFlight) { state.refreshTimer = setTimeout(refresh, 1_000); return; }
+  state.refreshInFlight = true;
   try {
     const wasRunning = Boolean(state.coordinator?.running);
     const [coordinator, challenges] = await Promise.all([api("/api/coordinator"), api("/api/challenges")]);
     state.coordinator = coordinator; state.challenges = challenges; renderCoordinator(); renderChallenges();
-    if (wasRunning && !coordinator.running) await loadCore(true);
-  } catch (error) { showToast(error.message, true); }
-  state.refreshTimer = setTimeout(refresh, state.coordinator?.running || state.challenges.length ? 1_000 : 4_000);
+    if (wasRunning && !coordinator.running) { await loadCore(true); await loadObservatory(); }
+  } catch (error) { if (error.status === 401) updateSseStatus("offline"); }
+  finally {
+    state.refreshInFlight = false;
+    const delay = state.coordinator?.running || state.challenges.length ? 1_000 : 10_000;
+    state.refreshTimer = setTimeout(refresh, Math.max(1_000, Math.min(delay, 10_000)));
+  }
 }
 
 async function initialize() {
-  Chart.defaults.color = "#a99bbd"; Chart.defaults.font.family = getComputedStyle(document.documentElement).fontFamily; Chart.defaults.devicePixelRatio = Math.min(window.devicePixelRatio || 1, 1.5);
-  bindEvents();
+  if (typeof Chart !== "undefined") { Chart.defaults.color = "#c5b8d5"; Chart.defaults.font.family = getComputedStyle(document.documentElement).fontFamily; Chart.defaults.devicePixelRatio = Math.min(window.devicePixelRatio || 1, 1.5); }
+  loadCelebrationSettings(); hydrateCelebrationControls(); initializeTabs(); bindEvents();
   try { await loadCore(false); } catch (error) { showToast(error.message, true); }
+  await loadObservatory();
+  connectObservatoryStream();
   state.challengeTicker = setInterval(updateChallengeCountdown, 1_000);
   refresh();
 }

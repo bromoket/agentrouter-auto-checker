@@ -4,13 +4,14 @@ import { AuthenticationChallengeBroker } from "./challenges";
 import type { AppConfig } from "./config";
 import { runSingleAccountCheck } from "./account-checker";
 import type { WorkerProgress } from "./account-checker";
+import type { ObservatoryCoordinator } from "./observatory/coordinator";
 import type { AutomationSettings } from "./settings";
 import { SettingsStore } from "./settings";
 import type { RunSnapshot } from "./storage";
 import { Store } from "./storage";
 import type { TelegramNotifier } from "./telegram";
 import { hasMonitorSession, pollAccountEndpoints } from "./endpoint-poller";
-
+import { OmpQuotaPoller } from "./omp-quota";
 export interface CoordinatorStatus {
   running: boolean;
   currentAccountId: string | null;
@@ -38,8 +39,9 @@ export interface CoordinatorEvent extends WorkerProgress {
 }
 
 function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return Bun.sleep(ms);
 }
+
 
 function failedSnapshot(account: GitHubAccount, startedAt: string, error: unknown): RunSnapshot {
   const endedAt = new Date().toISOString();
@@ -86,6 +88,8 @@ export class CheckCoordinator {
   };
   private schedulerStarted = false;
   private endpointPollerStarted = false;
+  private ompQuotaPollerStarted = false;
+  private readonly ompQuotaPoller: OmpQuotaPoller | null = null;
   private activeAbortController: AbortController | null = null;
 
   constructor(
@@ -95,8 +99,19 @@ export class CheckCoordinator {
     private readonly settings: SettingsStore,
     private readonly challenges: AuthenticationChallengeBroker,
     private readonly telegram: TelegramNotifier | null = null,
-  ) {}
-
+    ompQuotaPoller: OmpQuotaPoller | null = null,
+    private readonly observatoryCoordinator: ObservatoryCoordinator | null = null,
+  ) {
+    if (ompQuotaPoller) {
+      this.ompQuotaPoller = ompQuotaPoller;
+    } else if (config.ompQuota?.enabled) {
+      this.ompQuotaPoller = new OmpQuotaPoller(
+        config.ompQuota,
+        telegram,
+        config.telegram.repeatedFailureCount,
+      );
+    }
+  }
   getStatus(): CoordinatorStatus {
     return { ...this.status, events: [...this.status.events] };
   }
@@ -139,6 +154,47 @@ export class CheckCoordinator {
       this.endpointPollerStarted = true;
       void this.endpointPollingLoop();
     }
+    if (this.config.ompQuota?.enabled && !this.ompQuotaPollerStarted) {
+      this.ompQuotaPollerStarted = true;
+      void this.ompQuotaLoop();
+    }
+    if (this.observatoryCoordinator && this.config.observatory?.enabled) {
+      this.observatoryCoordinator.start();
+    }
+  }
+
+  stopScheduler(): void {
+    this.schedulerStarted = false;
+    this.endpointPollerStarted = false;
+    this.ompQuotaPollerStarted = false;
+    this.status.schedulerActive = false;
+    this.status.nextScheduledRunAt = null;
+    this.observatoryCoordinator?.stop();
+  }
+
+
+  private async ompQuotaLoop(): Promise<void> {
+    if (!this.ompQuotaPoller) return;
+    let nextPollAt = Date.now();
+    let probing = false;
+
+    while (this.ompQuotaPollerStarted) {
+      try {
+        if (Date.now() >= nextPollAt && !probing) {
+          probing = true;
+          try {
+            await this.ompQuotaPoller.pollOnce();
+          } finally {
+            probing = false;
+            nextPollAt = Date.now() + this.config.ompQuota.intervalMinutes * 60_000;
+          }
+        }
+      } catch (error) {
+        console.error(`OMP quota monitor loop error: ${error instanceof Error ? error.message : String(error)}`);
+        nextPollAt = Date.now() + 60_000;
+      }
+      await delay(1_000);
+    }
   }
 
   private async endpointPollingLoop(): Promise<void> {
@@ -163,6 +219,19 @@ export class CheckCoordinator {
             }
             const observation = await pollAccountEndpoints(account, this.config);
             const observationId = this.store.saveEndpointObservation(observation);
+            if (this.observatoryCoordinator) {
+              this.observatoryCoordinator.recordAgentRouterEndpointObservation({
+                accountId: observation.accountId,
+                accountLabel: observation.accountLabel,
+                observedAt: observation.observedAt,
+                status: observation.status,
+                balance: observation.balance,
+                consumed: observation.consumed,
+                requestCount: observation.requestCount,
+                latencyMs: observation.latencyMs,
+                errorCategory: observation.status === "error" ? "endpoint_failure" : null,
+              });
+            }
             if (observation.status === "ok") {
               const balanceObservation = this.store.getEndpointBalanceObservation(observationId);
               if (balanceObservation) {
@@ -331,6 +400,9 @@ export class CheckCoordinator {
         }
         const runId = this.store.saveRun(snapshot);
         await this.telegram?.processRun(runId, snapshot);
+        if (this.observatoryCoordinator) {
+          this.observatoryCoordinator.recordAgentRouterRun(snapshot, account);
+        }
         this.status.completedAccounts += 1;
         const reason = snapshot.errorMessage ? `: ${snapshot.errorMessage}` : "";
         console.log(

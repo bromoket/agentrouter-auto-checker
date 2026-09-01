@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { copyFile, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DEFAULT_AUTOMATION_SETTINGS, SettingsStore } from "./settings";
+import { DEFAULT_AUTOMATION_SETTINGS, SettingsStore, validateAutomationSettings } from "./settings";
 
 const directories: string[] = [];
 
@@ -18,6 +18,23 @@ describe("SettingsStore", () => {
     directories.push(directory);
     const store = new SettingsStore(join(directory, "settings.json"));
     expect(await store.load()).toEqual(DEFAULT_AUTOMATION_SETTINGS);
+    expect((await store.load()).captureScreenshots).toBe(false);
+  });
+
+  test("uses the exported defaults when optional values are invalid", () => {
+    expect(validateAutomationSettings({
+      intervalMinutes: "invalid",
+      endpointPollIntervalMinutes: null,
+      accountDelaySeconds: undefined,
+      twoFactorTimeoutMinutes: Number.NaN,
+      activityLookbackDays: {},
+    })).toMatchObject({
+      intervalMinutes: DEFAULT_AUTOMATION_SETTINGS.intervalMinutes,
+      endpointPollIntervalMinutes: DEFAULT_AUTOMATION_SETTINGS.endpointPollIntervalMinutes,
+      accountDelaySeconds: DEFAULT_AUTOMATION_SETTINGS.accountDelaySeconds,
+      twoFactorTimeoutMinutes: DEFAULT_AUTOMATION_SETTINGS.twoFactorTimeoutMinutes,
+      activityLookbackDays: DEFAULT_AUTOMATION_SETTINGS.activityLookbackDays,
+    });
   });
 
   test("persists bounded automation settings", async () => {
@@ -52,5 +69,13 @@ describe("SettingsStore", () => {
     expect(settings.openDashboardOnStart).toBe(false);
     expect(settings.browserHeadless).toBe(true);
     expect(settings.activityLookbackDays).toBe(28);
+    expect(settings.captureScreenshots).toBe(false);
+  });
+  test("rejects captureScreenshots enabled on win32", () => {
+    if (process.platform === "win32") {
+      expect(() => validateAutomationSettings({ captureScreenshots: true })).toThrow(/unsupported on windows/i);
+    } else {
+      expect(validateAutomationSettings({ captureScreenshots: true }).captureScreenshots).toBe(true);
+    }
   });
 });
