@@ -5117,23 +5117,6 @@ export class ObservatoryStore {
         importLedgerDeleted = 0;
       }
 
-      if (filter.agentrouterRunsOlderThan) {
-        const canonical = validateIsoUtcTimestamp(filter.agentrouterRunsOlderThan, "agentrouterRunsOlderThan");
-        const res = this.db
-          .query("DELETE FROM observatory_agentrouter_check_runs WHERE started_at < ?")
-          .run(canonical);
-        agentrouterRunsDeleted = res.changes;
-      }
-
-      if (filter.agentrouterUsageOlderThan) {
-        const canonical = validateIsoUtcTimestamp(filter.agentrouterUsageOlderThan, "agentrouterUsageOlderThan");
-        const cutoffTs = Math.floor(Date.parse(canonical) / 1000);
-        const res = this.db
-          .query("DELETE FROM observatory_agentrouter_usage_points WHERE created_at_ts < ?")
-          .run(cutoffTs);
-        agentrouterUsageDeleted = res.changes;
-      }
-
       if (filter.agentrouterBalancesOlderThan) {
         const canonical = validateIsoUtcTimestamp(filter.agentrouterBalancesOlderThan, "agentrouterBalancesOlderThan");
         const res = this.db
@@ -5150,12 +5133,29 @@ export class ObservatoryStore {
         agentrouterGrantsDeleted = res.changes;
       }
 
+      if (filter.agentrouterUsageOlderThan) {
+        const canonical = validateIsoUtcTimestamp(filter.agentrouterUsageOlderThan, "agentrouterUsageOlderThan");
+        const cutoffTs = Math.floor(Date.parse(canonical) / 1000);
+        const res = this.db
+          .query("DELETE FROM observatory_agentrouter_usage_points WHERE created_at_ts < ?")
+          .run(cutoffTs);
+        agentrouterUsageDeleted = res.changes;
+      }
+
       if (filter.agentrouterEndpointsOlderThan) {
         const canonical = validateIsoUtcTimestamp(filter.agentrouterEndpointsOlderThan, "agentrouterEndpointsOlderThan");
         const res = this.db
           .query("DELETE FROM observatory_agentrouter_endpoint_observations WHERE observed_at < ?")
           .run(canonical);
         agentrouterEndpointsDeleted = res.changes;
+      }
+
+      if (filter.agentrouterRunsOlderThan) {
+        const canonical = validateIsoUtcTimestamp(filter.agentrouterRunsOlderThan, "agentrouterRunsOlderThan");
+        const res = this.db
+          .query("DELETE FROM observatory_agentrouter_check_runs WHERE started_at < ?")
+          .run(canonical);
+        agentrouterRunsDeleted = res.changes;
       }
 
       return {
