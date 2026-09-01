@@ -32,7 +32,7 @@ const TEST_API_KEY = "test-dashboard-api-key-32-chars-long";
 
 function createTestConfig(
   dataDir: string,
-  options?: { auth?: boolean; observatory?: boolean; apiKey?: string },
+  options?: { auth?: boolean; observatory?: boolean; collector?: boolean; apiKey?: string },
 ): AppConfig {
   const host = "127.0.0.1";
   const port = 30_000 + Math.floor(Math.random() * 10_000);
@@ -106,7 +106,7 @@ function createTestConfig(
       ompTimeoutMs: 215_000,
     },
     collector: {
-      enabled: false,
+      enabled: options?.collector ?? false,
       host: "127.0.0.1",
       port: 8457,
       publicOrigin: "https://bkserver.tailbbaa91.ts.net:8457",
@@ -119,7 +119,7 @@ function createTestConfig(
 }
 
 async function setupDashboardFixture(
-  options?: { auth?: boolean; observatory?: boolean; apiKey?: string },
+  options?: { auth?: boolean; observatory?: boolean; collector?: boolean; apiKey?: string },
 ) {
   const dir = await makeTempDir();
   const config = createTestConfig(dir, options);
@@ -567,21 +567,26 @@ describe("Observatory enabled endpoints and SSE replay", () => {
       const overviewRes = await fetch(`${fixture.baseUrl}/api/observatory/overview`, { headers: { cookie: cookie! } });
       expect(overviewRes.status).toBe(200);
       const overview = (await overviewRes.json()) as {
-        totals: { identities: number };
+        capabilities: { collectorSessions: boolean };
+        totals: { identities: number; activeSessions?: number };
         identities: unknown[];
       };
+      expect(overview.capabilities.collectorSessions).toBe(false);
+      expect(overview.totals.activeSessions).toBeUndefined();
       expect(overview.totals.identities).toBeGreaterThanOrEqual(1);
       expect(overview.identities.length).toBeGreaterThanOrEqual(1);
       // 1b. Live
       const liveRes = await fetch(`${fixture.baseUrl}/api/observatory/live`, { headers: { cookie: cookie! } });
       expect(liveRes.status).toBe(200);
       const liveData = (await liveRes.json()) as {
-        totals: { identitiesCount: number };
+        capabilities: { collectorSessions: boolean };
+        totals: { identitiesCount: number; activeSessionsCount?: number };
         agentrouter: unknown[];
       };
+      expect(liveData.capabilities.collectorSessions).toBe(false);
+      expect(liveData.totals.activeSessionsCount).toBeUndefined();
       expect(liveData.totals.identitiesCount).toBeGreaterThanOrEqual(1);
       expect(Array.isArray(liveData.agentrouter)).toBe(true);
-
       // 2. Quotas
       const quotasRes = await fetch(`${fixture.baseUrl}/api/observatory/quotas`, { headers: { cookie: cookie! } });
       expect(quotasRes.status).toBe(200);
@@ -619,9 +624,12 @@ describe("Observatory enabled endpoints and SSE replay", () => {
       // 5. Sessions
       const sessionsRes = await fetch(`${fixture.baseUrl}/api/observatory/sessions`, { headers: { cookie: cookie! } });
       expect(sessionsRes.status).toBe(200);
-      const sessions = (await sessionsRes.json()) as { sessions: unknown[] };
-      expect(Array.isArray(sessions.sessions)).toBe(true);
-
+      const sessions = (await sessionsRes.json()) as {
+        sessions: unknown[];
+        capabilities: { collectorSessions: boolean };
+      };
+      expect(sessions.capabilities.collectorSessions).toBe(false);
+      expect(sessions.sessions.length).toBe(0);
       // 6. Events
       const eventsRes = await fetch(`${fixture.baseUrl}/api/observatory/events`, { headers: { cookie: cookie! } });
       expect(eventsRes.status).toBe(200);
@@ -718,6 +726,94 @@ describe("Observatory enabled endpoints and SSE replay", () => {
   });
 });
 
+describe("Observatory collector-backed sessions capability and privacy", () => {
+  test("truthfully exposes collectorSessions capability and omits identityId when collector is enabled", async () => {
+    const fixture = await setupDashboardFixture({ observatory: true, collector: true });
+    try {
+      const { cookie } = await fixture.login();
+      expect(cookie).not.toBeNull();
+
+      // Seed a host and session summary
+      fixture.obsStore!.upsertHost({
+        hostId: "node-collector-1",
+        operatorLabel: "workstation-1",
+        platform: "linux-x64",
+        collectorVersion: "1.0.0",
+        lastSeenAt: "2026-09-01T12:00:00.000Z",
+        observedAt: "2026-09-01T12:00:00.000Z",
+        status: "online",
+        activeSessionsCount: 1,
+        activeIdentitiesCount: 0,
+      });
+
+      fixture.obsStore!.upsertSessionSummary({
+        sessionId: "sess-collector-100",
+        hostId: "node-collector-1",
+        identityId: "secret-should-be-omitted",
+        status: "active",
+        startedAt: "2026-09-01T12:00:00.000Z",
+        model: "claude-3-7-sonnet",
+        provider: "anthropic",
+        durationMs: 12000,
+        totalTokens: 500,
+        contextBps: 2000,
+        costEstimate: 0.05,
+        costTrust: "estimated",
+      });
+
+      // Bootstrap check
+      const bootstrapRes = await fetch(`${fixture.baseUrl}/api/bootstrap`, { headers: { cookie: cookie! } });
+      expect(bootstrapRes.status).toBe(200);
+      const bootstrap = (await bootstrapRes.json()) as {
+        capabilities: { observatory: boolean; collectorSessions: boolean };
+      };
+      expect(bootstrap.capabilities.observatory).toBe(true);
+      expect(bootstrap.capabilities.collectorSessions).toBe(true);
+
+      // Overview check with collector enabled
+      const overviewRes = await fetch(`${fixture.baseUrl}/api/observatory/overview`, { headers: { cookie: cookie! } });
+      expect(overviewRes.status).toBe(200);
+      const overview = (await overviewRes.json()) as {
+        capabilities: { collectorSessions: boolean };
+        totals: { activeSessions?: number };
+        sessions: Array<Record<string, unknown>>;
+        hosts: Array<{ hostId: string; activeSessionsCount: number | null }>;
+      };
+      expect(overview.capabilities.collectorSessions).toBe(true);
+      expect(overview.totals.activeSessions).toBe(1);
+      expect(overview.sessions.length).toBe(1);
+      expect(overview.sessions[0].sessionId).toBe("sess-collector-100");
+      expect(overview.sessions[0].identityId).toBeUndefined();
+      const collectorHost = overview.hosts.find((h) => h.hostId === "node-collector-1");
+      expect(collectorHost?.activeSessionsCount).toBe(1);
+
+      // Sessions endpoint check
+      const sessionsRes = await fetch(`${fixture.baseUrl}/api/observatory/sessions`, { headers: { cookie: cookie! } });
+      expect(sessionsRes.status).toBe(200);
+      const sessionsData = (await sessionsRes.json()) as {
+        capabilities: { collectorSessions: boolean };
+        sessions: Array<Record<string, unknown>>;
+      };
+      expect(sessionsData.capabilities.collectorSessions).toBe(true);
+      expect(sessionsData.sessions.length).toBe(1);
+      expect(sessionsData.sessions[0].sessionId).toBe("sess-collector-100");
+      // Identity attribution must be omitted from public session DTO
+      expect(sessionsData.sessions[0].identityId).toBeUndefined();
+
+      // Health endpoint check
+      const healthRes = await fetch(`${fixture.baseUrl}/api/observatory/health`, { headers: { cookie: cookie! } });
+      expect(healthRes.status).toBe(200);
+      const healthData = (await healthRes.json()) as {
+        capabilities: { collectorSessions: boolean };
+        services: Array<{ name: string; status: string }>;
+      };
+      expect(healthData.capabilities.collectorSessions).toBe(true);
+      expect(healthData.services.some((s) => s.name === "Collector ingestion")).toBe(true);
+    } finally {
+      fixture.close();
+    }
+  });
+});
 describe("Secret exclusion and privacy invariants", () => {
   test("never returns account passwords or secret tokens in public API responses", async () => {
     const fixture = await setupDashboardFixture({ observatory: true });

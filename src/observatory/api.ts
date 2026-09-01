@@ -131,7 +131,7 @@ function identityDto(identity: StoredProviderIdentity) {
   };
 }
 
-function hostDto(host: StoredFleetHost) {
+function hostDto(host: StoredFleetHost, collectorSessionsEnabled = false) {
   return {
     hostId: host.hostId,
     hostname: host.operatorLabel || "Fleet host",
@@ -140,7 +140,7 @@ function hostDto(host: StoredFleetHost) {
     lastSeenAt: host.lastSeenAt,
     observedAt: host.observedAt,
     status: host.status,
-    activeSessionsCount: host.activeSessionsCount,
+    activeSessionsCount: collectorSessionsEnabled ? host.activeSessionsCount : null,
     activeIdentitiesCount: host.activeIdentitiesCount,
   };
 }
@@ -149,7 +149,6 @@ function sessionDto(session: StoredSessionSummary) {
   return {
     sessionId: session.sessionId,
     hostId: session.hostId,
-    identityId: session.identityId,
     status: session.status,
     startedAt: session.startedAt,
     lastActiveAt: session.lastActiveAt,
@@ -170,13 +169,14 @@ function sessionDto(session: StoredSessionSummary) {
 
 function eventDto(event: StoredObservatoryEvent) {
   const category = event.eventType.replaceAll("_", " ");
+  const isSessionEvent = event.eventType.startsWith("session_");
   return {
     eventId: event.eventId,
     eventType: event.eventType,
     severity: event.severity,
     fingerprint: event.fingerprint,
     hostId: event.hostId,
-    identityId: event.identityId,
+    identityId: isSessionEvent ? null : event.identityId,
     sessionId: event.sessionId,
     occurredAt: event.occurredAt,
     title: category.replace(/\b\w/g, (letter) => letter.toUpperCase()),
@@ -219,34 +219,38 @@ export async function handleObservatoryApi(
 
   // 1. Overview
   if (method === "GET" && pathname === "/api/observatory/overview") {
+    const collectorSessions = Boolean(context.config?.collector?.enabled);
     const hosts = context.store.listHosts();
     const identities = context.store.listIdentities();
     const quotas = context.store.listCurrentQuotaWindows();
-    const sessions = context.store.listSessionSummaries({ limit: 50 });
+    const sessions = collectorSessions ? context.store.listSessionSummaries({ limit: 50 }) : [];
     const events = context.store.listEvents({ limit: 20 });
     const warningQuotas = quotas.filter((w) =>
       ["warning", "critical", "exhausted"].includes(String(w.status)),
     ).length;
     const onlineHosts = hosts.filter((h) => h.status === "online").length;
-    const activeSessions = sessions.filter((s) => s.status === "active").length;
+    const activeSessions = collectorSessions ? sessions.filter((s) => s.status === "active").length : null;
 
     return jsonResponse({
       generatedAt: new Date().toISOString(),
+      capabilities: {
+        collectorSessions,
+      },
       totals: {
         hosts: hosts.length,
         onlineHosts,
         identities: identities.length,
-        activeSessions,
+        ...(collectorSessions ? { activeSessions } : {}),
         warningQuotas,
       },
       summary: {
         hosts: hosts.length,
         onlineHosts,
         identities: identities.length,
-        activeSessions,
+        ...(collectorSessions ? { activeSessions } : {}),
         warningQuotas,
       },
-      hosts: hosts.map(hostDto),
+      hosts: hosts.map((h) => hostDto(h, collectorSessions)),
       identities: identities.map(identityDto),
       quotas: quotas.map(quotaDto),
       sessions: sessions.map(sessionDto),
@@ -255,11 +259,12 @@ export async function handleObservatoryApi(
   }
   // 1b. Live Real-Time Snapshot
   if (method === "GET" && pathname === "/api/observatory/live") {
+    const collectorSessions = Boolean(context.config?.collector?.enabled);
     const now = new Date().toISOString();
     const hosts = context.store.listHosts();
     const identities = context.store.listIdentities();
     const quotas = context.store.listCurrentQuotaWindows();
-    const sessions = context.store.listSessionSummaries({ limit: 20 });
+    const sessions = collectorSessions ? context.store.listSessionSummaries({ limit: 20 }) : [];
     const events = context.store.listEvents({ limit: 15 });
     const arAccounts = context.store.listAgentRouterAccounts();
     const agentrouter = arAccounts.map((acc) => {
@@ -297,11 +302,14 @@ export async function handleObservatoryApi(
     const warningQuotas = quotas.filter((w) =>
       ["warning", "critical", "exhausted"].includes(String(w.status)),
     ).length;
-    const activeSessions = sessions.filter((s) => s.status === "active").length;
+    const activeSessions = collectorSessions ? sessions.filter((s) => s.status === "active").length : null;
     const coordStatus = context.coordinator.getStatus();
 
     return jsonResponse({
       timestamp: now,
+      capabilities: {
+        collectorSessions,
+      },
       totals: {
         totalBalance: Number(totalBalance.toFixed(2)),
         totalConsumed: Number(totalConsumed.toFixed(2)),
@@ -310,12 +318,12 @@ export async function handleObservatoryApi(
         onlineHostsCount: onlineHosts,
         identitiesCount: identities.length,
         warningQuotasCount: warningQuotas,
-        activeSessionsCount: activeSessions,
+        ...(collectorSessions ? { activeSessionsCount: activeSessions } : {}),
       },
       agentrouter,
       quotas: quotas.map(quotaDto),
       identities: identities.map(identityDto),
-      hosts: hosts.map(hostDto),
+      hosts: hosts.map((h) => hostDto(h, collectorSessions)),
       sessions: sessions.map(sessionDto),
       recentEvents: events.map(eventDto),
       coordinator: {
@@ -373,6 +381,7 @@ export async function handleObservatoryApi(
 
   // 4. Hosts
   if (method === "GET" && pathname === "/api/observatory/hosts") {
+    const collectorSessions = Boolean(context.config?.collector?.enabled);
     const status = url.searchParams.get("status") || undefined;
     const limit = Math.min(
       1_000,
@@ -380,14 +389,21 @@ export async function handleObservatoryApi(
     );
     const offset = Math.max(0, Number.parseInt(url.searchParams.get("offset") || "0", 10) || 0);
 
-    const hosts = context.store.listHosts({ status, limit, offset }).map(hostDto);
-    return jsonResponse({ hosts });
+    const hosts = context.store.listHosts({ status, limit, offset }).map((h) => hostDto(h, collectorSessions));
+    return jsonResponse({ hosts, capabilities: { collectorSessions } });
   }
 
   // 5. Sessions
   if (method === "GET" && pathname === "/api/observatory/sessions") {
+    const collectorSessions = Boolean(context.config?.collector?.enabled);
+    if (!collectorSessions) {
+      return jsonResponse({
+        sessions: [],
+        capabilities: { collectorSessions: false },
+        message: "Collector session telemetry is unavailable because collector ingestion is disabled.",
+      });
+    }
     const hostId = url.searchParams.get("hostId") || undefined;
-    const identityId = url.searchParams.get("identityId") || undefined;
     const status = url.searchParams.get("status") || undefined;
     const since = url.searchParams.get("since") || undefined;
     const limit = Math.min(
@@ -398,17 +414,17 @@ export async function handleObservatoryApi(
 
     const sessions = context.store.listSessionSummaries({
       hostId,
-      identityId,
       status,
       since,
       limit,
       offset,
     }).map(sessionDto);
-    return jsonResponse({ sessions });
+    return jsonResponse({ sessions, capabilities: { collectorSessions: true } });
   }
 
   // 6. Events
   if (method === "GET" && pathname === "/api/observatory/events") {
+    const collectorSessions = Boolean(context.config?.collector?.enabled);
     const eventType = url.searchParams.get("eventType") || undefined;
     const severity = (url.searchParams.get("severity") as EventSeverity) || undefined;
     const hostId = url.searchParams.get("hostId") || undefined;
@@ -431,7 +447,7 @@ export async function handleObservatoryApi(
       offset: sessionId ? 0 : offset,
     });
     const selected = sessionId
-      ? matching.filter((event) => event.sessionId === sessionId).slice(offset, offset + limit)
+      ? (collectorSessions ? matching.filter((event) => event.sessionId === sessionId).slice(offset, offset + limit) : [])
       : matching;
     const events = selected.map(eventDto);
     const audit = context.store.listAuditEntries({ limit: 100 }).map((entry) => ({
@@ -443,7 +459,7 @@ export async function handleObservatoryApi(
       occurredAt: entry.occurredAt,
       details: {},
     }));
-    return jsonResponse({ events, audit });
+    return jsonResponse({ events, audit, capabilities: { collectorSessions } });
   }
 
   // 7. Policies (GET & PUT)
@@ -520,8 +536,34 @@ export async function handleObservatoryApi(
 
   // 8. Health
   if (method === "GET" && pathname === "/api/observatory/health") {
+    const collectorSessions = Boolean(context.config?.collector?.enabled);
     const coordStatus = context.coordinator.getStatus();
     const isDegraded = coordStatus.consecutiveProbeFailures > 0;
+
+    const services = [
+      {
+        name: "Observatory API",
+        status: "ok",
+        message: "Observatory REST endpoints operational",
+      },
+      {
+        name: "Event stream",
+        status: "online",
+        message: "SSE stream available",
+      },
+      {
+        name: "AgentRouter coordinator",
+        status: coordStatus.running ? "active" : "online",
+        message: coordStatus.running ? "Quota poller active" : "Idle",
+      },
+    ];
+    if (collectorSessions) {
+      services.push({
+        name: "Collector ingestion",
+        status: "online",
+        message: "Workstation session collector active",
+      });
+    }
 
     return jsonResponse({
       status: isDegraded ? "degraded" : "ok",
@@ -529,27 +571,14 @@ export async function handleObservatoryApi(
       uptimeSeconds: Math.floor(process.uptime()),
       schedulerActive: coordStatus.running,
       observatoryActive: true,
+      capabilities: {
+        collectorSessions,
+      },
       lastProbeAt: coordStatus.lastProbeAt,
       lastProbeStatus: coordStatus.lastProbeStatus,
       lastProbeError: coordStatus.lastProbeError,
       consecutiveProbeFailures: coordStatus.consecutiveProbeFailures,
-      services: [
-        {
-          name: "Observatory API",
-          status: "ok",
-          message: "Observatory REST endpoints operational",
-        },
-        {
-          name: "Event stream",
-          status: "online",
-          message: "SSE stream available",
-        },
-        {
-          name: "AgentRouter coordinator",
-          status: coordStatus.running ? "active" : "online",
-          message: coordStatus.running ? "Quota poller active" : "Idle",
-        },
-      ],
+      services,
     });
   }
 

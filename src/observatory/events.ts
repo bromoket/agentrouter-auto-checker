@@ -712,7 +712,7 @@ export function evaluateSessionTransition(
       severity: "info",
       sessionId: session.sessionId,
       hostId: session.hostId,
-      identityId: session.identityId ?? null,
+      identityId: null,
       occurredAt: sourceTimestamp,
       fingerprint: createDeterministicFingerprint("session_started", session.sessionId, sourceTimestamp),
     });
@@ -725,7 +725,7 @@ export function evaluateSessionTransition(
         severity: "error",
         sessionId: session.sessionId,
         hostId: session.hostId,
-        identityId: session.identityId ?? null,
+        identityId: null,
         occurredAt: sourceTimestamp,
         fingerprint: createDeterministicFingerprint(
           "session_failed",
@@ -740,7 +740,7 @@ export function evaluateSessionTransition(
       severity: "info",
       sessionId: session.sessionId,
       hostId: session.hostId,
-      identityId: session.identityId ?? null,
+      identityId: null,
       occurredAt: sourceTimestamp,
       fingerprint: createDeterministicFingerprint("session_closed", session.sessionId, sourceTimestamp),
     });
@@ -768,7 +768,7 @@ export function evaluateSessionTransition(
           severity: "critical",
           sessionId: session.sessionId,
           hostId: session.hostId,
-          identityId: session.identityId ?? null,
+          identityId: null,
           occurredAt: sourceTimestamp,
           fingerprint: createDeterministicFingerprint(
             "session_context_critical",
@@ -786,7 +786,7 @@ export function evaluateSessionTransition(
           severity: "warning",
           sessionId: session.sessionId,
           hostId: session.hostId,
-          identityId: session.identityId ?? null,
+          identityId: null,
           occurredAt: sourceTimestamp,
           fingerprint: createDeterministicFingerprint(
             "session_context_warning",

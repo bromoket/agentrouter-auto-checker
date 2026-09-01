@@ -260,6 +260,10 @@ export function startDashboard(
               automation,
             },
             challenges: challenges.list(),
+            capabilities: {
+              observatory: config.observatory.enabled,
+              collectorSessions: Boolean(config.collector?.enabled),
+            },
           });
         }
 

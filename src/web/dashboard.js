@@ -4,6 +4,7 @@ const state = {
   settings: null,
   coordinator: null,
   challenges: [],
+  capabilities: { collectorSessions: false },
   overview: null,
   selectedId: null,
   activeView: "overview",
@@ -1447,7 +1448,10 @@ function eventPresentation(item) {
   if (item?.meter) context.push(safeLabel(item.meter));
   else if (item?.model) context.push(safeLabel(item.model));
   if (item?.windowId) context.push(maskedIdentifier(item.windowId, "Window"));
-  else if (item?.sessionId) context.push(maskedIdentifier(item.sessionId, "Session"));
+  else if (item?.sessionId) {
+    context.push(maskedIdentifier(item.sessionId, "Session"));
+    if (item?.hostId) context.push(maskedIdentifier(item.hostId, "Host"));
+  }
   else if (item?.hostId) context.push(maskedIdentifier(item.hostId, "Host"));
   else if (item?.identityId) context.push(maskedIdentifier(item.identityId, "Identity"));
   return { type, title: labels[type] || "Observatory state changed", detail: context.length ? context.join(" · ") : "Public event details unavailable" };
@@ -1558,7 +1562,14 @@ async function loadObservatory() {
     ["events", "/api/observatory/events"], ["policies", "/api/observatory/policies"], ["health", "/api/observatory/health"],
   ];
   const values = await Promise.all(entries.map(([name, path]) => optionalApi(name, path)));
-  entries.forEach(([name], index) => { if (values[index] !== null) state.observatory[name] = values[index]; });
+  entries.forEach(([name], index) => {
+    if (values[index] !== null) {
+      state.observatory[name] = values[index];
+      if (values[index]?.capabilities) {
+        state.capabilities = { ...(state.capabilities || {}), ...values[index].capabilities };
+      }
+    }
+  });
   renderActiveView();
 }
 
@@ -1596,7 +1607,14 @@ async function refreshObservatoryFamilies(families) {
   const endpoints = { overview: "/api/observatory/overview", quotas: "/api/observatory/quotas", identities: "/api/observatory/identities", events: "/api/observatory/events", policies: "/api/observatory/policies", health: "/api/observatory/health" };
   const names = [...new Set(families)].filter((name) => endpoints[name]);
   const values = await Promise.all(names.map((name) => optionalApi(name, endpoints[name])));
-  names.forEach((name, index) => { if (values[index] !== null) state.observatory[name] = values[index]; });
+  names.forEach((name, index) => {
+    if (values[index] !== null) {
+      state.observatory[name] = values[index];
+      if (values[index]?.capabilities) {
+        state.capabilities = { ...(state.capabilities || {}), ...values[index].capabilities };
+      }
+    }
+  });
   renderActiveView();
 }
 
@@ -1868,7 +1886,7 @@ async function selectAccount(id) {
 
 async function loadCore(refreshView = true) {
   const [bootstrap, overview] = await Promise.all([api("/api/bootstrap"), api("/api/overview")]);
-  state.accounts = bootstrap.accounts; state.historicalAccounts = bootstrap.historicalAccounts; state.settings = bootstrap.settings; state.coordinator = bootstrap.coordinator; state.challenges = bootstrap.challenges || []; state.overview = overview;
+  state.accounts = bootstrap.accounts; state.historicalAccounts = bootstrap.historicalAccounts; state.settings = bootstrap.settings; state.coordinator = bootstrap.coordinator; state.challenges = bootstrap.challenges || []; state.capabilities = bootstrap.capabilities || { collectorSessions: false }; state.overview = overview;
   const automation = state.settings.automation;
   byId("schedule-label").textContent = automation.schedulerEnabled ? `Every ${automation.intervalMinutes} min · ${automation.accountDelaySeconds}s gap` : "Paused";
   byId("account-file").textContent = "Protected local vault";
