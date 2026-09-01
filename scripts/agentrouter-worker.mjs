@@ -1385,6 +1385,8 @@ async function runWorker({ account, config }) {
 
   let context;
   let launchAttempts = 0;
+  let activePage;
+  let authenticatedUserId;
   if (config.captureScreenshots) {
     if (process.platform === "win32") {
       log(`[${account.label}] screenshots are unsupported on Windows; skipping`);
