@@ -1275,6 +1275,29 @@ async function logoutViaApi(page, config, userId, apiCalls) {
   return new URL(page.url()).pathname === '/login' && !(await readStoredUser(page));
 }
 
+async function isServerSessionLoggedOut(page, userId) {
+  const observation = await page.evaluate(async (numericUserId) => {
+    const response = await fetch('/api/user/self', {
+      credentials: 'include',
+      headers: {
+        Accept: 'application/json',
+        'Cache-Control': 'no-store',
+        'New-API-User': String(numericUserId),
+      },
+    });
+    const contentType = response.headers.get('content-type')?.toLowerCase() ?? '';
+    const payload = contentType.includes('application/json')
+      ? await response.json().catch(() => null)
+      : null;
+    return {
+      status: response.status,
+      contentType,
+      loggedOut: response.status === 401 || response.status === 403 || payload?.success === false,
+    };
+  }, userId).catch(() => null);
+  return observation?.loggedOut === true;
+}
+
 async function captureAgentRouterApiToken(page, config, userId, apiCalls) {
   const started = Date.now();
   const response = await page.evaluate(async (numericUserId) => {
@@ -1286,18 +1309,46 @@ async function captureAgentRouterApiToken(page, config, userId, apiCalls) {
         'New-API-User': String(numericUserId),
       },
     });
+    const contentType = result.headers.get('content-type')?.toLowerCase() ?? '';
+    if (!contentType.includes('application/json')) {
+      return {
+        status: result.status,
+        ok: false,
+        contentType,
+        error: 'Expected a JSON token response.',
+        payload: null,
+      };
+    }
     const payload = await result.json().catch(() => null);
-    return { status: result.status, ok: result.ok, payload };
+    if (!payload) {
+      return {
+        status: result.status,
+        ok: false,
+        contentType,
+        error: 'Token response was not valid JSON.',
+        payload: null,
+      };
+    }
+    return {
+      status: result.status,
+      ok: result.ok && payload.success === true,
+      contentType,
+      error: result.ok && payload.success === true
+        ? undefined
+        : `Token endpoint returned HTTP ${result.status} or a failed response envelope.`,
+      payload,
+    };
   }, userId).catch(() => null);
   apiCalls.push({
     path: '/api/token/?p=0&size=100',
     method: 'GET',
     status: response?.status ?? 0,
-    ok: Boolean(response?.ok),
+    ok: response?.ok === true,
     latencyMs: Date.now() - started,
-    contentType: 'application/json',
+    contentType: response?.contentType ?? '',
+    ...(response?.error ? { error: response.error } : {}),
   });
-  if (!response?.ok || response.payload?.success !== true) return null;
+  if (!response?.ok) return null;
   const items = Array.isArray(response.payload?.data?.items) ? response.payload.data.items : [];
   const nowSeconds = Math.floor(Date.now() / 1_000);
   const candidates = items
@@ -1342,9 +1393,13 @@ async function logoutAndPersist(context, page, config, userId, statePath, apiCal
       uiError = errorText(error);
     }
     if (!page.isClosed() && new URL(page.url()).pathname === "/login") {
-      await page.evaluate(() => localStorage.removeItem("user")).catch(() => undefined);
-      redirectedToLogin = true;
-      uiError = "";
+      if (await isServerSessionLoggedOut(page, userId)) {
+        await page.evaluate(() => localStorage.removeItem("user")).catch(() => undefined);
+        redirectedToLogin = true;
+        uiError = "";
+      } else if (!uiError) {
+        uiError = "AgentRouter showed /login but the current browser session remained authenticated.";
+      }
     }
   }
   const loggedOut = redirectedToLogin && !(await readStoredUser(page));
@@ -1607,7 +1662,9 @@ async function runWorker({ account, config }) {
       result.apiCalls,
     ) ?? undefined;
 
-    progress("logging-out", "Token captured. Verifying AgentRouter logout.", 92);
+    await persistAgentRouterState(context, monitorStatePath, config.baseUrl);
+
+    progress("logging-out", "Token and minute-poll session captured. Verifying AgentRouter logout.", 92);
     result.loggedOut = await logoutAndPersist(
       context,
       activePage,
@@ -1619,33 +1676,13 @@ async function runWorker({ account, config }) {
     if (!result.loggedOut) {
       throw new Error("AgentRouter's visible Quit flow did not confirm logout.");
     }
-    // Any failure during monitor authentication must force-clean the new AgentRouter session.
-    result.loggedOut = false;
-    progress("monitor-session", "Logout confirmed. Creating the dedicated read-only polling session.", 96);
-    const monitorOauthPage = await openGithubOAuthPage(
-      activePage,
-      config.baseUrl,
-      config.requestTimeoutMs,
-    );
-    activePage = monitorOauthPage;
-    await completeGithubAuthentication(monitorOauthPage, account, config);
-    const monitorAuthenticated = await waitForAgentRouterUser(
-      context,
-      config.baseUrl,
-      config.loginTimeoutMs,
-    );
-    activePage = monitorAuthenticated.page;
-    authenticatedUserId = monitorAuthenticated.user.id;
-    await persistAgentRouterState(context, monitorStatePath, config.baseUrl);
-    progress("monitor-session-ready", "Read-only polling session refreshed for the next hour.", 98);
 
     const failedCall = result.apiCalls.find((call) => !call.ok && !call.recovered);
     if (failedCall) {
       throw new Error(`AgentRouter UI step failed: ${failedCall.path} returned ${failedCall.status}.`);
     }
-    result.loggedOut = true;
-    log(`[${account.label}] data saved, interactive logout confirmed, and read-only polling session refreshed`);
-    progress("complete", "Snapshot saved, logout verified, and minute polling session refreshed.", 100);
+    log(`[${account.label}] data saved and AgentRouter logout confirmed`);
+    progress("complete", "Snapshot saved and AgentRouter logout confirmed through Quit.", 100);
   } catch (error) {
     result.status = "error";
     result.errorMessage = errorText(error);
