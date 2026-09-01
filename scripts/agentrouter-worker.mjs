@@ -1218,6 +1218,27 @@ async function logoutViaApi(page, config, userId, apiCalls) {
   return new URL(page.url()).pathname === '/login' && !(await readStoredUser(page));
 }
 
+async function isServerSessionLoggedOut(page, userId) {
+  const observation = await page.evaluate(async (numericUserId) => {
+    const response = await fetch('/api/user/self', {
+      credentials: 'include',
+      headers: {
+        Accept: 'application/json',
+        'Cache-Control': 'no-store',
+        'New-API-User': String(numericUserId),
+      },
+    });
+    const contentType = response.headers.get('content-type')?.toLowerCase() ?? '';
+    const payload = contentType.includes('application/json')
+      ? await response.json().catch(() => null)
+      : null;
+    return {
+      loggedOut: response.status === 401 || response.status === 403 || payload?.success === false,
+    };
+  }, userId).catch(() => null);
+  return observation?.loggedOut === true;
+}
+
 async function captureAgentRouterApiToken(page, config, userId, apiCalls) {
   const started = Date.now();
   const response = await page.evaluate(async (numericUserId) => {
@@ -1229,18 +1250,46 @@ async function captureAgentRouterApiToken(page, config, userId, apiCalls) {
         'New-API-User': String(numericUserId),
       },
     });
+    const contentType = result.headers.get('content-type')?.toLowerCase() ?? '';
+    if (!contentType.includes('application/json')) {
+      return {
+        status: result.status,
+        ok: false,
+        contentType,
+        error: 'Expected a JSON token response.',
+        payload: null,
+      };
+    }
     const payload = await result.json().catch(() => null);
-    return { status: result.status, ok: result.ok, payload };
+    if (!payload) {
+      return {
+        status: result.status,
+        ok: false,
+        contentType,
+        error: 'Token response was not valid JSON.',
+        payload: null,
+      };
+    }
+    return {
+      status: result.status,
+      ok: result.ok && payload.success === true,
+      contentType,
+      error: result.ok && payload.success === true
+        ? undefined
+        : `Token endpoint returned HTTP ${result.status} or a failed response envelope.`,
+      payload,
+    };
   }, userId).catch(() => null);
   apiCalls.push({
     path: '/api/token/?p=0&size=100',
     method: 'GET',
     status: response?.status ?? 0,
-    ok: Boolean(response?.ok),
+    ok: response?.ok === true,
     latencyMs: Date.now() - started,
-    contentType: 'application/json',
+    contentType: response?.contentType ?? '',
+    ...(response?.error ? { error: response.error } : {}),
   });
-  if (!response?.ok || response.payload?.success !== true) return null;
+  if (!response?.ok) return null;
   const items = Array.isArray(response.payload?.data?.items) ? response.payload.data.items : [];
   const nowSeconds = Math.floor(Date.now() / 1_000);
   const candidates = items
@@ -1280,12 +1329,26 @@ async function logoutAndPersist(context, page, config, userId, statePath, apiCal
       await quit.waitFor({ state: "visible", timeout: 10_000 });
       await quit.click({ timeout: 10_000 });
       await page.waitForURL(/\/login(?:[?#]|$)/, { timeout: 15_000 });
-      redirectedToLogin = new URL(page.url()).pathname === "/login";
     } catch (error) {
       uiError = errorText(error);
     }
+    if (!page.isClosed() && new URL(page.url()).pathname === "/login") {
+      if (await isServerSessionLoggedOut(page, userId)) {
+        await page.evaluate(() => localStorage.removeItem("user")).catch(() => undefined);
+        redirectedToLogin = true;
+        uiError = "";
+      } else if (!uiError) {
+        uiError = "AgentRouter showed /login but the current browser session remained authenticated.";
+      }
+    }
   }
   const loggedOut = redirectedToLogin && !(await readStoredUser(page));
+  if (loggedOut) {
+    const failedApiLogout = [...apiCalls].reverse().find(
+      (call) => call.source === "api-logout" && !call.ok && !call.recovered,
+    );
+    if (failedApiLogout) failedApiLogout.recovered = true;
+  }
   apiCalls.push({
     path: logoutMethod === "api" ? "/api/user/logout → /login" : "/console → profile menu → Quit",
     method: logoutMethod === "api" ? "GET" : "UI",
