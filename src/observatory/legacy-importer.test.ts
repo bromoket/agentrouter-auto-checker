@@ -167,6 +167,10 @@ async function makeLegacySnapshot(): Promise<{ directory: string; path: string }
   db.close();
   db = null;
   Bun.gc(true);
+  const snapshot = new Database(path, { create: false, strict: true });
+  snapshot.exec("PRAGMA journal_mode = WAL;");
+  snapshot.close();
+  Bun.gc(true);
   for (const mutableFile of [
     mutablePath,
     `${mutablePath}-wal`,

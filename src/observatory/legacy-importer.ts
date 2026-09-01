@@ -868,7 +868,6 @@ export async function importLegacyAgentRouterHistory(
       }
     }
 
-    await assertNoSidecars(stagedSource.stagingPath, "source_changed");
     await verifyImmutableSource(stagedSource, validated.expectedSha256);
     if (projectionError) throw projectionError;
     if (!projection) throw new LegacyImportError("invalid_source_data");
