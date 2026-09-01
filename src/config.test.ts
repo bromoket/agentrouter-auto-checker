@@ -43,7 +43,7 @@ describe("loadConfig dashboard network controls", () => {
     expect(() => loadConfig()).toThrow("Cleartext non-loopback dashboard binds are forbidden");
   });
 
-  test("rejects wildcard binds and cross-port origins", () => {
+  test("rejects wildcard binds and invalid dashboard origin ports", () => {
     process.env.DASHBOARD_HOST = "0.0.0.0";
     expect(() => loadConfig()).toThrow("exact loopback or private interface");
 
@@ -54,6 +54,9 @@ describe("loadConfig dashboard network controls", () => {
     process.env.DASHBOARD_PORT = "8456";
     process.env.DASHBOARD_ALLOWED_ORIGINS = "http://bkserver:9999";
     expect(() => loadConfig()).toThrow("using DASHBOARD_PORT");
+
+    process.env.DASHBOARD_ALLOWED_ORIGINS = "https://bkserver:0";
+    expect(() => loadConfig()).toThrow("DASHBOARD_ALLOWED_ORIGINS");
   });
 });
 

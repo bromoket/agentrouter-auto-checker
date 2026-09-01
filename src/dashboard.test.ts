@@ -35,7 +35,7 @@ function createTestConfig(
   options?: { auth?: boolean; observatory?: boolean; apiKey?: string },
 ): AppConfig {
   const host = "127.0.0.1";
-  const port = 0;
+  const port = 30_000 + Math.floor(Math.random() * 10_000);
   const env: Record<string, string> = {
     DASHBOARD_HOST: host,
     DASHBOARD_PORT: String(port),
@@ -178,6 +178,7 @@ async function setupDashboardFixture(
   const server = startDashboard(store, accounts, settings, challenges, coordinator, config, observatoryContext);
 
   const baseUrl = `http://${config.dashboardHost}:${server.port}`;
+  expect(server.port).toBe(config.dashboardPort);
   config.dashboardAllowedOrigins = [baseUrl];
   const apiKey = options?.apiKey ?? (options?.auth || options?.observatory ? TEST_API_KEY : undefined);
 
@@ -226,6 +227,12 @@ describe("Dashboard authentication and route security", () => {
       expect(healthRes.status).toBe(200);
       const healthData = (await healthRes.json()) as { status: string };
       expect(healthData.status).toBe("ok");
+
+      fixture.config.dashboardAllowedOrigins.push("https://bkserver.tailbbaa91.ts.net");
+      const proxiedHealthRes = await fetch(`${fixture.baseUrl}/api/health`, {
+        headers: { host: "bkserver.tailbbaa91.ts.net" },
+      });
+      expect(proxiedHealthRes.status).toBe(200);
 
       // Unauthenticated root and index.html serve login surface
       const rootRes = await fetch(`${fixture.baseUrl}/`);

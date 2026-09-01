@@ -57,6 +57,53 @@ function isAllowedOrigin(request: Request, allowedOrigins: readonly string[]): b
   return origin !== null && allowedOrigins.includes(origin);
 }
 
+function isAllowedRequestHost(request: Request, allowedOrigins: readonly string[]): boolean {
+  const rawHost = request.headers.get("host");
+  if (
+    !rawHost ||
+    rawHost !== rawHost.trim() ||
+    /[\u0000-\u001f\u007f\s@/\\?#]/.test(rawHost)
+  ) {
+    return false;
+  }
+
+  const ipv6Match = /^\[([0-9a-fA-F:.]+)\](?::(\d{1,5}))?$/.exec(rawHost);
+  const hostMatch = /^([A-Za-z0-9][A-Za-z0-9.-]*)(?::(\d{1,5}))?$/.exec(rawHost);
+  const match = ipv6Match ?? hostMatch;
+  if (!match) {
+    return false;
+  }
+  const rawHostname = match[1];
+  const rawPort = match[2];
+  if (rawPort && (Number(rawPort) < 1 || Number(rawPort) > 65_535)) {
+    return false;
+  }
+  try {
+    new URL(`http://${rawHost}`);
+  } catch {
+    return false;
+  }
+
+  const hostname = rawHostname.toLowerCase();
+  const port = rawPort ? Number(rawPort) : null;
+  return allowedOrigins.some((origin) => {
+    const url = new URL(origin);
+    const configuredHostname = url.hostname.replace(/^\[|\]$/g, "").toLowerCase();
+    if (hostname !== configuredHostname) {
+      return false;
+    }
+    if (port === null) {
+      return url.port === "";
+    }
+    const configuredPort = url.port
+      ? Number(url.port)
+      : url.protocol === "https:"
+        ? 443
+        : 80;
+    return port === configuredPort;
+  });
+}
+
 function boundedInteger(raw: string | null, fallback: number, max: number): number {
   const value = Number.parseInt(raw ?? "", 10);
   return Number.isSafeInteger(value) && value > 0 ? Math.min(value, max) : fallback;
@@ -112,7 +159,7 @@ export function startDashboard(
       try {
         const url = new URL(request.url);
         const method = request.method.toUpperCase();
-        if (!config.dashboardAllowedOrigins.includes(url.origin)) {
+        if (!isAllowedRequestHost(request, config.dashboardAllowedOrigins)) {
           return errorResponse("Invalid host.", 421);
         }
 

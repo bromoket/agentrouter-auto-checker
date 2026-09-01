@@ -225,6 +225,7 @@ function normalizeDashboardOrigins(raw: string | undefined, host: string, port: 
 
   for (const value of values) {
     const url = new URL(value);
+    const specifiedPort = url.port ? Number(url.port) : null;
     if (
       (url.protocol !== "http:" && url.protocol !== "https:") ||
       url.username ||
@@ -232,6 +233,7 @@ function normalizeDashboardOrigins(raw: string | undefined, host: string, port: 
       url.pathname !== "/" ||
       url.search ||
       url.hash ||
+      (specifiedPort !== null && (specifiedPort < 1 || specifiedPort > 65_535)) ||
       (url.protocol === "http:" && Number(url.port || "80") !== port)
     ) {
       throw new Error(
