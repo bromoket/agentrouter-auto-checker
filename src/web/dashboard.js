@@ -1052,13 +1052,29 @@ function renderObservatoryOverview() {
   } else {
     const totals = data?.totals || data?.summary || data || {};
     const identityTotal = numericOrNull(totals.identityCount ?? totals.identities) ?? (state.observatory.identities ? identities.length : null);
-    const warningQuotas = numericOrNull(totals.warningQuotas) ?? (state.observatory.quotas ? quotas.filter((item) => ["warning", "critical", "exhausted"].includes(String(item.status))).length : null);
+    const warningQuotas = numericOrNull(totals.warningQuotas ?? totals.warningQuotasCount) ?? (state.observatory.quotas ? quotas.filter((item) => ["warning", "critical", "exhausted"].includes(String(item.status))).length : null);
     const latestObservedAt = quotas.map(observedAtOf).filter(Boolean).sort((a, b) => Date.parse(b) - Date.parse(a))[0];
+
+    let providerBreakdown = "Observed provider identities";
+    if (identities.length) {
+      const counts = new Map();
+      for (const id of identities) {
+        const p = id.provider === "openai-codex" ? "OpenAI" : id.provider === "google-antigravity" ? "Antigravity" : safeLabel(id.provider, "Provider");
+        counts.set(p, (counts.get(p) || 0) + 1);
+      }
+      providerBreakdown = [...counts.entries()].map(([p, count]) => `${count} ${p}`).join(" + ");
+    }
+
+    const lastSyncCard = metricCard("Last quota sync", latestObservedAt ? formatRelative(latestObservedAt) : "Unavailable", latestObservedAt ? formatDate(latestObservedAt, true) : "Waiting for broker usage", PALETTE[5]);
+    if (latestObservedAt) {
+      lastSyncCard.title = `Last observed at ${formatDate(latestObservedAt, true)}`;
+    }
+
     metrics.append(
-      metricCard("Quota accounts", valueOrUnavailable(identityTotal, formatNumber), identityTotal === null ? "Identity endpoint unavailable" : "1 OpenAI + 10 Antigravity", PALETTE[0]),
+      metricCard("Quota accounts", valueOrUnavailable(identityTotal, formatNumber), identityTotal === null ? "Identity endpoint unavailable" : providerBreakdown, PALETTE[0]),
       metricCard("Quota windows", state.observatory.quotas ? formatNumber(quotas.length) : "Unavailable", "Broker usage refreshed every minute", PALETTE[4]),
       metricCard("Quota alerts", state.observatory.quotas ? formatNumber(warningQuotas) : "Unavailable", state.observatory.quotas ? "Warning, critical, or exhausted" : "Quota endpoint unavailable", warningQuotas ? PALETTE[6] : PALETTE[5]),
-      metricCard("Last quota sync", latestObservedAt ? formatRelative(latestObservedAt) : "Unavailable", latestObservedAt ? formatDate(latestObservedAt, true) : "Waiting for broker usage", PALETTE[5]),
+      lastSyncCard,
     );
   }
   renderProviderAccountOverview();
@@ -1067,52 +1083,91 @@ function renderObservatoryOverview() {
 function renderProviderAccountOverview() {
   const container = byId("overview-provider-accounts");
   if (!container) return;
+  if (state.observatoryErrors.has("overview") || (state.observatoryErrors.has("identities") && state.observatoryErrors.has("quotas"))) {
+    const error = state.observatoryErrors.get("overview") || state.observatoryErrors.get("quotas");
+    container.replaceChildren(stateCard("error", "Broker quota accounts unavailable", error?.status === 404 ? "Observatory is disabled or unsupported by the server." : safeLabel(error?.message, "The endpoint could not be reached.")));
+    return;
+  }
   const identities = listFrom(state.observatory.identities, ["identities", "credentials"]);
   const quotas = listFrom(state.observatory.quotas, ["quotas", "quotaWindows", "windows"]);
-  if (!state.observatory.identities || !state.observatory.quotas) {
+  if (!state.observatory.identities && !state.observatory.quotas) {
     container.replaceChildren(stateCard("loading", "Loading broker quota accounts", "Waiting for the authenticated OMP usage response."));
     return;
   }
-  if (!identities.length || !quotas.length) {
+  if (!identities.length && !quotas.length) {
     container.replaceChildren(stateCard("empty", "No broker quotas available", "OMP reported no usable OpenAI or Antigravity quota windows."));
     return;
   }
   container.replaceChildren();
   const severity = { ok: 0, warning: 1, critical: 2, exhausted: 3 };
-  for (const identity of identities) {
-    const windows = quotas.filter((quota) => quota.identityId === identity.identityId);
+  const identitiesById = new Map(identities.map((id) => [id.identityId, id]));
+  const allIdentityIds = new Set([
+    ...identities.map((i) => i.identityId),
+    ...quotas.map((q) => q.identityId).filter(Boolean),
+  ]);
+
+  for (const identityId of allIdentityIds) {
+    const identity = identitiesById.get(identityId);
+    const windows = quotas.filter((quota) => quota.identityId === identityId);
     const worst = [...windows].sort((a, b) => (severity[quotaStatus(b)] || 0) - (severity[quotaStatus(a)] || 0) || finite(b.usedFraction) - finite(a.usedFraction))[0];
-    const status = worst ? quotaStatus(worst) : identity.health || "unknown";
-    const card = element("article", `provider-account-card ${statusClass(status)}`);
+    const status = worst ? quotaStatus(worst) : identity?.health || "unknown";
+    const observedAt = observedAtOf(worst || identity);
+    const card = element("article", `provider-account-card ${statusClass(status)}${isStale(observedAt) ? " stale" : ""}`);
     const heading = element("div", "entity-heading");
     const copy = element("div");
-    const providerName = identity.provider === "openai-codex" ? "OpenAI Codex / ChatGPT" : identity.provider === "google-antigravity" ? "Google Antigravity" : safeLabel(identity.provider, "Provider");
-    copy.append(element("h3", null, safeLabel(identity.label, "Quota account")), element("p", null, providerName));
+    const provider = identity?.provider || worst?.provider || "unknown";
+    const providerName = provider === "openai-codex" ? "OpenAI Codex / ChatGPT" : provider === "google-antigravity" ? "Google Antigravity" : safeLabel(provider, "Provider");
+    const safeIdentityLabel = identity?.label ? safeLabel(identity.label) : maskedIdentifier(identityId, "Quota account");
+    copy.append(element("h3", null, safeIdentityLabel), element("p", null, providerName));
     heading.append(copy, statusBadge(status, "unknown"));
+
     const used = numericOrNull(worst?.usedFraction);
     const meter = element("div", "quota-meter");
     const meterCopy = element("div", "quota-meter-copy");
-    meterCopy.append(element("strong", null, used === null ? "Unavailable" : `${Math.round(used * 100)}%`), element("span", null, worst ? safeLabel(worst.resetLabel || worst.meter || worst.windowId, "highest window") : "No window"));
+    const windowName = worst ? safeLabel(worst.resetLabel || worst.windowLabel || worst.meter || worst.model || worst.windowId, "highest window") : "No window";
+    meterCopy.append(
+      element("strong", null, used === null ? "Unavailable" : `${Math.round(used * 100)}%`),
+      element("span", null, windowName),
+    );
     const track = element("div", "quota-track");
     const fill = element("i", "quota-fill");
     fill.style.width = used === null ? "0%" : `${Math.min(100, Math.max(0, used * 100))}%`;
-    track.append(fill); meter.append(meterCopy, track);
+    track.append(fill);
+    meter.append(meterCopy, track);
+
     const stats = element("div", "entity-stats");
     const windowCount = element("div", "entity-stat");
     windowCount.append(element("span", null, "Tracked windows"), element("strong", null, formatNumber(windows.length)));
+
+    const remainingStat = element("div", "entity-stat");
+    let remText = "Unavailable";
+    if (worst && Number.isFinite(Number(worst.remainingFraction))) {
+      remText = `${Math.round(Number(worst.remainingFraction) * 100)}%`;
+    } else if (worst && worst.remainingUnits !== null && worst.remainingUnits !== undefined) {
+      remText = `${formatCompact(worst.remainingUnits)} ${safeLabel(worst.unit || "units")}`;
+    } else if (used !== null) {
+      remText = `${Math.max(0, Math.round((1 - used) * 100))}%`;
+    }
+    remainingStat.append(element("span", null, "Remaining"), element("strong", null, remText));
+
     const reset = element("div", "entity-stat");
-    reset.append(element("span", null, "Next reset"), element("strong", null, worst?.resetsAt ? formatRelative(worst.resetsAt) : "Unavailable"));
-    stats.append(windowCount, reset);
-    card.append(heading, meter, stats, metadataBadges(worst || identity, "OMP broker", providerName));
+    const resetEl = element("strong", null, worst?.resetsAt ? formatRelative(worst.resetsAt) : "Unavailable");
+    if (worst?.resetsAt) {
+      resetEl.title = formatDate(worst.resetsAt, true);
+    }
+    reset.append(element("span", null, "Next reset"), resetEl);
+    stats.append(windowCount, remainingStat, reset);
+
+    card.append(heading, meter, stats, metadataBadges(worst || identity, "Observatory broker", providerName));
     container.append(card);
   }
 }
 
 function quotaStatus(item) {
   const used = Number(item?.usedFraction);
-  if (String(item?.status).toLowerCase() === "exhausted" || used >= 1) return "exhausted";
-  if (String(item?.status).toLowerCase() === "critical" || used >= .95) return "critical";
-  if (String(item?.status).toLowerCase() === "warning" || used >= .8) return "warning";
+  if (String(item?.status).toLowerCase() === "exhausted" || (Number.isFinite(used) && used >= 1)) return "exhausted";
+  if (String(item?.status).toLowerCase() === "critical" || (Number.isFinite(used) && used >= .95)) return "critical";
+  if (String(item?.status).toLowerCase() === "warning" || (Number.isFinite(used) && used >= .8)) return "warning";
   return item?.status || "ok";
 }
 
@@ -1131,8 +1186,16 @@ function renderQuotaSummary(items) {
 function renderQuotas() {
   const container = byId("quotas-container");
   const items = listFrom(state.observatory.quotas, ["quotas", "quotaWindows", "windows"]);
+  const identities = listFrom(state.observatory.identities, ["identities", "credentials"]);
+  const identitiesById = new Map(identities.map((id) => [id.identityId, id]));
+
   renderQuotaSummary(items);
-  if (renderEndpointState(container, "quotas", { keys: ["quotas", "quotaWindows", "windows"], title: "No provider quota windows", description: "No provider has reported a quota observation yet. Values are intentionally unavailable rather than shown as zero." })) return;
+  if (renderEndpointState(container, "quotas", {
+    keys: ["quotas", "quotaWindows", "windows"],
+    title: "No provider quota windows",
+    description: "No provider has reported a quota observation yet. Values are intentionally unavailable rather than shown as zero.",
+  })) return;
+
   const providerFilter = byId("quota-provider-filter").value;
   const statusFilter = byId("quota-status-filter").value;
   const filtered = items.filter((item) => {
@@ -1145,31 +1208,81 @@ function renderQuotas() {
     container.append(stateCard("empty", "No matching quota windows", "Adjust the provider or status filter to inspect other windows."));
     return;
   }
+
   for (const item of filtered) {
     const status = quotaStatus(item);
     const observedAt = observedAtOf(item);
     const card = element("article", `quota-card ${status}${isStale(observedAt) ? " stale" : ""}`);
     const heading = element("div", "entity-heading");
-    const identity = element("div");
-    const quotaLabel = safeLabel(item.resetLabel || item.meter || item.model, "Quota window");
-    const windowLabel = item.windowId ? `${quotaLabel} · ${maskedIdentifier(item.windowId, "Window")}` : quotaLabel;
-    identity.append(element("h3", null, safeLabel(item.provider || item.kind, "Unknown provider")), element("p", null, windowLabel));
-    heading.append(identity, statusBadge(status));
-    const used = Number(item.usedFraction);
+    const identityBox = element("div");
+
+    const identity = identitiesById.get(item.identityId);
+    const identityLabel = identity?.label ? safeLabel(identity.label) : (item.identityId ? maskedIdentifier(item.identityId, "Identity") : "Global");
+    const providerName = item.provider === "openai-codex" ? "OpenAI Codex" : item.provider === "google-antigravity" ? "Google Antigravity" : safeLabel(item.provider, "Provider");
+
+    const windowLabel = safeLabel(item.resetLabel || item.windowLabel || item.meter || item.model, "Quota window");
+    const bucketDetail = item.windowId && item.windowId !== item.bucketId
+      ? `${windowLabel} · ${maskedIdentifier(item.windowId, "Window")}`
+      : (item.bucketId ? `${windowLabel} · ${maskedIdentifier(item.bucketId, "Bucket")}` : windowLabel);
+
+    identityBox.append(
+      element("h3", null, `${providerName} · ${identityLabel}`),
+      element("p", null, bucketDetail),
+    );
+    heading.append(identityBox, statusBadge(status));
+
+    const used = numericOrNull(item.usedFraction);
     const meter = element("div", "quota-meter");
     const copy = element("div", "quota-meter-copy");
-    copy.append(element("strong", null, Number.isFinite(used) ? `${Math.round(used * 100)}%` : "Unavailable"), element("span", null, "utilized"));
+    copy.append(
+      element("strong", null, used === null ? "Unavailable" : `${Math.round(used * 100)}%`),
+      element("span", null, used === null ? "utilization unavailable" : "utilized"),
+    );
     const track = element("div", "quota-track");
     const fill = element("i", "quota-fill");
-    fill.style.width = Number.isFinite(used) ? `${Math.min(100, Math.max(0, used * 100))}%` : "0%";
-    track.append(fill); meter.append(copy, track);
+    fill.style.width = used === null ? "0%" : `${Math.min(100, Math.max(0, used * 100))}%`;
+    track.append(fill);
+    meter.append(copy, track);
+
     const stats = element("div", "entity-stats");
+
+    // Remaining stat
     const remaining = element("div", "entity-stat");
-    remaining.append(element("span", null, "Remaining"), element("strong", null, valueOrUnavailable(item.remainingUnits ?? (Number.isFinite(Number(item.remainingFraction)) ? `${Math.round(Number(item.remainingFraction) * 100)}%` : null), (value) => typeof value === "number" ? formatCompact(value) : String(value))));
+    let remDisplay = "Unavailable";
+    if (Number.isFinite(Number(item.remainingFraction))) {
+      const remPct = `${Math.round(Number(item.remainingFraction) * 100)}%`;
+      if (item.remainingUnits !== null && item.remainingUnits !== undefined) {
+        remDisplay = `${remPct} (${formatCompact(item.remainingUnits)} ${item.unit || "units"})`;
+      } else {
+        remDisplay = `${remPct} remaining`;
+      }
+    } else if (item.remainingUnits !== null && item.remainingUnits !== undefined) {
+      remDisplay = `${formatCompact(item.remainingUnits)} ${item.unit || "units"}`;
+    } else if (used !== null) {
+      remDisplay = `${Math.max(0, Math.round((1 - used) * 100))}% remaining`;
+    }
+    remaining.append(element("span", null, "Remaining"), element("strong", null, remDisplay));
+
+    // Reset stat
     const reset = element("div", "entity-stat");
-    reset.append(element("span", null, "Reset"), element("strong", null, item.resetsAt ? formatRelative(item.resetsAt) : "Unavailable"));
-    stats.append(remaining, reset);
-    card.append(heading, meter, stats, metadataBadges(item, "Provider collector", safeLabel(item.provider || "provider")));
+    const resetDisplay = item.resetsAt ? formatRelative(item.resetsAt) : (item.resetLabel ? safeLabel(item.resetLabel) : "Unavailable");
+    const resetEl = element("strong", null, resetDisplay);
+    if (item.resetsAt) {
+      resetEl.title = formatDate(item.resetsAt, true);
+    }
+    reset.append(element("span", null, "Reset"), resetEl);
+
+    // Model / Meter or Scope stat
+    const modelOrMeter = item.model || item.meter || item.tier;
+    if (modelOrMeter) {
+      const modelStat = element("div", "entity-stat");
+      modelStat.append(element("span", null, "Model / Meter"), element("strong", null, safeLabel(modelOrMeter)));
+      stats.append(remaining, reset, modelStat);
+    } else {
+      stats.append(remaining, reset);
+    }
+
+    card.append(heading, meter, stats, metadataBadges(item, "Observatory broker", safeLabel(item.provider || "provider")));
     container.append(card);
   }
 }

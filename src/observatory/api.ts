@@ -84,14 +84,20 @@ function quotaDto(quota: CurrentQuotaWindow) {
   return {
     identityId: quota.identityId,
     provider: quota.provider,
+    bucketId: quota.bucketId,
+    windowId: quota.windowId,
     windowLabel: durationHours === null ? "Quota window" : `${durationHours} hour window`,
     windowDurationMs: quota.windowDurationMs,
     meter: quota.meter,
     model: quota.model,
     tier: quota.tier,
     hostId: quota.hostId,
+    lastFetchedAt: quota.lastFetchedAt,
     observedAt: quota.lastObservedAt,
+    lastObservedAt: quota.lastObservedAt,
     resetsAt: quota.resetsAt,
+    resetLabel: quota.resetLabel,
+    resetCredits: quota.resetCredits,
     usedFraction: quota.usedFraction,
     remainingFraction: quota.remainingFraction,
     usedUnits: quota.usedUnits,
@@ -99,6 +105,11 @@ function quotaDto(quota: CurrentQuotaWindow) {
     remainingUnits: quota.remainingUnits,
     unit: quota.unit,
     status: quota.status,
+    errorCategory: quota.errorCategory,
+    consecutiveFailures: quota.consecutiveFailures,
+    source: quota.source,
+    sourceVersion: quota.sourceVersion,
+    updatedAt: quota.updatedAt,
   };
 }
 

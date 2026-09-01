@@ -585,10 +585,26 @@ describe("Observatory enabled endpoints and SSE replay", () => {
       // 2. Quotas
       const quotasRes = await fetch(`${fixture.baseUrl}/api/observatory/quotas`, { headers: { cookie: cookie! } });
       expect(quotasRes.status).toBe(200);
-      const quotas = (await quotasRes.json()) as { quotas: unknown[] };
+      const quotas = (await quotasRes.json()) as {
+        quotas: Array<{
+          identityId: string;
+          provider: string;
+          windowId: string;
+          usedFraction: number;
+          remainingFraction: number | null;
+          status: string;
+          source?: string | null;
+        }>;
+      };
       expect(quotas.quotas.length).toBeGreaterThanOrEqual(1);
-
-      // 3. Identities
+      const targetQuota = quotas.quotas.find((q) => q.windowId === "5h" && q.provider === "openai-codex");
+      expect(targetQuota).toBeDefined();
+      expect(targetQuota!.identityId).toBe("a".repeat(64));
+      expect(targetQuota!.provider).toBe("openai-codex");
+      expect(targetQuota!.windowId).toBe("5h");
+      expect(targetQuota!.usedFraction).toBe(0.25);
+      expect(targetQuota!.remainingFraction).toBe(0.75);
+      expect(targetQuota!.status).toBe("ok");
       const identitiesRes = await fetch(`${fixture.baseUrl}/api/observatory/identities`, { headers: { cookie: cookie! } });
       expect(identitiesRes.status).toBe(200);
       const identities = (await identitiesRes.json()) as { identities: unknown[] };
