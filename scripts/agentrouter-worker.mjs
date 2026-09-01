@@ -1394,9 +1394,6 @@ async function runWorker({ account, config }) {
     }
 
   try {
-    if (config.captureScreenshots) {
-      await secureScreenshotDirectory(config.screenshotDir);
-    }
     await mkdir(config.accountStateDir, { recursive: true });
     const profileAvailable = await fileExists(profileMarkerPath);
     await mkdir(profilePath, { recursive: true });
