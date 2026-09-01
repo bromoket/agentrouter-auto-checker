@@ -145,7 +145,7 @@ function finite(value, fallback = 0) {
 
 function formatMoney(value, digits = 2) {
   if (!Number.isFinite(Number(value))) return "—";
-  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: digits, maximumFractionDigits: Math.max(digits, 4) }).format(Number(value));
+  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: Math.min(digits, 2), maximumFractionDigits: digits }).format(Number(value));
 }
 
 function formatCompact(value, digits = 1) {
@@ -778,8 +778,8 @@ function renderAccountMetrics() {
   const grid = byId("metric-grid");
   grid.replaceChildren();
   grid.append(
-    metricCard("Available balance", formatMoney(metrics.balance, 4), "Current AgentRouter balance", PALETTE[0]),
-    metricCard("Lifetime spend", formatMoney(metrics.consumed, 4), "Account consumption", PALETTE[1]),
+    metricCard("Available balance", formatMoney(metrics.balance, 2), "Current AgentRouter balance", PALETTE[0]),
+    metricCard("Total Usage (Spent)", formatMoney(metrics.consumed, 2), "Account consumption", PALETTE[1]),
     metricCard("Requests", formatCompact(metrics.requestCount), "Account lifetime", PALETTE[2]),
     metricCard("7-day tokens", formatCompact(metrics.statisticalTokens), `${formatCompact(metrics.statisticalCount)} statistical calls`, PALETTE[3]),
     metricCard("Average RPM", formatNumber(metrics.averageRpm, 4), "Collected window", PALETTE[4]),
