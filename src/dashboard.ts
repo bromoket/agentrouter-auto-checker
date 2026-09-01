@@ -155,7 +155,7 @@ export function startDashboard(
   const server = Bun.serve({
     hostname: config.dashboardHost,
     port: config.dashboardPort,
-    async fetch(request) {
+    async fetch(request, server) {
       try {
         const url = new URL(request.url);
         const method = request.method.toUpperCase();
@@ -224,6 +224,9 @@ export function startDashboard(
         if (url.pathname.startsWith("/api/observatory/")) {
           if (!config.observatory.enabled || !observatoryContext) {
             return errorResponse("Observatory is disabled.", 404);
+          }
+          if (method === "GET" && url.pathname === "/api/observatory/stream") {
+            server.timeout(request, 0);
           }
           const observatoryResponse = await handleObservatoryApi(request, url, method, {
             store: observatoryContext.store,

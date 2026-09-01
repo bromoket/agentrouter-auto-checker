@@ -14,7 +14,7 @@ const state = {
   credits: [],
   grants: [],
   endpointObservations: [],
-  observatory: { overview: null, quotas: null, identities: null, hosts: null, sessions: null, events: null, policies: null, health: null },
+  observatory: { overview: null, quotas: null, identities: null, events: null, policies: null, health: null },
   observatoryErrors: new Map(),
   charts: new Map(),
   chartTimers: new Map(),
@@ -42,8 +42,6 @@ const state = {
   policyEditingTarget: null,
   policyEditingRule: null,
   previousFocus: new WeakMap(),
-  celebrationFrame: null,
-  celebrationSettings: { effect: "fireworks", duration: "short", intensity: "low" },
 };
 
 const PALETTE = ["#a855f7", "#d946ef", "#8b5cf6", "#f472b6", "#67e8f9", "#6ee7b7", "#fbbf24"];
@@ -1047,25 +1045,66 @@ function renderObservatoryOverview() {
   const metrics = byId("observatory-summary-metrics");
   metrics.replaceChildren();
   const data = state.observatory.overview;
-  const hosts = listFrom(state.observatory.hosts, ["hosts"]);
   const quotas = listFrom(state.observatory.quotas, ["quotas", "quotaWindows", "windows"]);
   const identities = listFrom(state.observatory.identities, ["identities", "credentials"]);
-  const sessions = listFrom(state.observatory.sessions, ["sessions"]);
   if (!data && state.observatoryErrors.has("overview")) {
-    metrics.append(metricCard("Fleet hosts", "Unavailable", "Overview endpoint unsupported", PALETTE[6], "stale"));
+    metrics.append(metricCard("Broker quotas", "Unavailable", "Overview endpoint unavailable", PALETTE[6], "stale"));
   } else {
     const totals = data?.totals || data?.summary || data || {};
-    const hostTotal = numericOrNull(totals.hostCount ?? totals.hosts) ?? (state.observatory.hosts ? hosts.length : null);
-    const onlineHosts = numericOrNull(totals.onlineHosts) ?? (state.observatory.hosts ? hosts.filter((item) => item.status === "online").length : null);
     const identityTotal = numericOrNull(totals.identityCount ?? totals.identities) ?? (state.observatory.identities ? identities.length : null);
-    const activeSessions = numericOrNull(totals.activeSessions) ?? (state.observatory.sessions ? sessions.filter((item) => item.status === "active").length : null);
     const warningQuotas = numericOrNull(totals.warningQuotas) ?? (state.observatory.quotas ? quotas.filter((item) => ["warning", "critical", "exhausted"].includes(String(item.status))).length : null);
+    const latestObservedAt = quotas.map(observedAtOf).filter(Boolean).sort((a, b) => Date.parse(b) - Date.parse(a))[0];
     metrics.append(
-      metricCard("Fleet hosts", valueOrUnavailable(hostTotal, formatNumber), hostTotal === null ? "Observatory data unavailable" : `${formatNumber(onlineHosts)} online`, PALETTE[4]),
-      metricCard("Provider identities", valueOrUnavailable(identityTotal, formatNumber), identityTotal === null ? "Identity endpoint unavailable" : "Credential health observed", PALETTE[0]),
-      metricCard("Active sessions", valueOrUnavailable(activeSessions, formatNumber), state.observatory.sessions ? "OMP execution telemetry" : "Session endpoint unavailable", PALETTE[5]),
+      metricCard("Quota accounts", valueOrUnavailable(identityTotal, formatNumber), identityTotal === null ? "Identity endpoint unavailable" : "1 OpenAI + 10 Antigravity", PALETTE[0]),
+      metricCard("Quota windows", state.observatory.quotas ? formatNumber(quotas.length) : "Unavailable", "Broker usage refreshed every minute", PALETTE[4]),
       metricCard("Quota alerts", state.observatory.quotas ? formatNumber(warningQuotas) : "Unavailable", state.observatory.quotas ? "Warning, critical, or exhausted" : "Quota endpoint unavailable", warningQuotas ? PALETTE[6] : PALETTE[5]),
+      metricCard("Last quota sync", latestObservedAt ? formatRelative(latestObservedAt) : "Unavailable", latestObservedAt ? formatDate(latestObservedAt, true) : "Waiting for broker usage", PALETTE[5]),
     );
+  }
+  renderProviderAccountOverview();
+}
+
+function renderProviderAccountOverview() {
+  const container = byId("overview-provider-accounts");
+  if (!container) return;
+  const identities = listFrom(state.observatory.identities, ["identities", "credentials"]);
+  const quotas = listFrom(state.observatory.quotas, ["quotas", "quotaWindows", "windows"]);
+  if (!state.observatory.identities || !state.observatory.quotas) {
+    container.replaceChildren(stateCard("loading", "Loading broker quota accounts", "Waiting for the authenticated OMP usage response."));
+    return;
+  }
+  if (!identities.length || !quotas.length) {
+    container.replaceChildren(stateCard("empty", "No broker quotas available", "OMP reported no usable OpenAI or Antigravity quota windows."));
+    return;
+  }
+  container.replaceChildren();
+  const severity = { ok: 0, warning: 1, critical: 2, exhausted: 3 };
+  for (const identity of identities) {
+    const windows = quotas.filter((quota) => quota.identityId === identity.identityId);
+    const worst = [...windows].sort((a, b) => (severity[quotaStatus(b)] || 0) - (severity[quotaStatus(a)] || 0) || finite(b.usedFraction) - finite(a.usedFraction))[0];
+    const status = worst ? quotaStatus(worst) : identity.health || "unknown";
+    const card = element("article", `provider-account-card ${statusClass(status)}`);
+    const heading = element("div", "entity-heading");
+    const copy = element("div");
+    const providerName = identity.provider === "openai-codex" ? "OpenAI Codex / ChatGPT" : identity.provider === "google-antigravity" ? "Google Antigravity" : safeLabel(identity.provider, "Provider");
+    copy.append(element("h3", null, safeLabel(identity.label, "Quota account")), element("p", null, providerName));
+    heading.append(copy, statusBadge(status, "unknown"));
+    const used = numericOrNull(worst?.usedFraction);
+    const meter = element("div", "quota-meter");
+    const meterCopy = element("div", "quota-meter-copy");
+    meterCopy.append(element("strong", null, used === null ? "Unavailable" : `${Math.round(used * 100)}%`), element("span", null, worst ? safeLabel(worst.resetLabel || worst.meter || worst.windowId, "highest window") : "No window"));
+    const track = element("div", "quota-track");
+    const fill = element("i", "quota-fill");
+    fill.style.width = used === null ? "0%" : `${Math.min(100, Math.max(0, used * 100))}%`;
+    track.append(fill); meter.append(meterCopy, track);
+    const stats = element("div", "entity-stats");
+    const windowCount = element("div", "entity-stat");
+    windowCount.append(element("span", null, "Tracked windows"), element("strong", null, formatNumber(windows.length)));
+    const reset = element("div", "entity-stat");
+    reset.append(element("span", null, "Next reset"), element("strong", null, worst?.resetsAt ? formatRelative(worst.resetsAt) : "Unavailable"));
+    stats.append(windowCount, reset);
+    card.append(heading, meter, stats, metadataBadges(worst || identity, "OMP broker", providerName));
+    container.append(card);
   }
 }
 
@@ -1169,99 +1208,10 @@ function renderCredentials() {
     container.append(card);
   }
 }
-function renderHosts() {
-  const container = byId("hosts-container");
-  const items = listFrom(state.observatory.hosts, ["hosts"]);
-  const metrics = byId("hosts-summary-metrics");
-  const available = state.observatory.hosts !== null && !state.observatoryErrors.has("hosts");
-  const value = (number) => available ? formatNumber(number) : "Unavailable";
-  metrics.replaceChildren(
-    metricCard("Fleet hosts", value(items.length), available ? "Observed host runners" : "Host endpoint unavailable", PALETTE[0]),
-    metricCard("Online", value(items.filter((item) => item.status === "online").length), available ? "Heartbeat current" : "Host endpoint unavailable", PALETTE[5]),
-    metricCard("Degraded", value(items.filter((item) => item.status === "degraded").length), available ? "Partial availability" : "Host endpoint unavailable", PALETTE[6]),
-    metricCard("Offline", value(items.filter((item) => item.status === "offline").length), available ? "Heartbeat lost" : "Host endpoint unavailable", PALETTE[3]),
-  );
-  if (renderEndpointState(container, "hosts", { keys: ["hosts"], title: "No fleet hosts", description: "No host heartbeat has reached the observatory yet." })) return;
-  const filter = byId("host-status-filter").value;
-  const filtered = items.filter((item) => filter === "all" || item.status === filter);
-  container.replaceChildren();
-  if (!filtered.length) { container.append(stateCard("empty", "No matching hosts", "Change the status filter to inspect other fleet hosts.")); return; }
-  for (const item of filtered) {
-    const observedAt = observedAtOf(item);
-    const card = element("article", `host-card ${statusClass(item.status)}${isStale(observedAt) ? " stale" : ""}`);
-    const heading = element("div", "entity-heading");
-    const identity = element("div");
-    identity.append(element("h3", null, safeLabel(item.operatorLabel || item.hostname, "Fleet host")), element("p", "host-safe-id", maskedIdentifier(item.hostId, "Host")));
-    heading.append(identity, statusBadge(item.status, "unknown"));
-    const stats = element("div", "entity-stats");
-    const hostStats = [["Collector version", item.collectorVersion || item.agentVersion, (value) => safeLabel(value)], ["Active sessions", item.activeSessionsCount, formatNumber], ["Provider identities", item.activeIdentitiesCount, formatNumber]];
-    for (const [label, value, formatter] of hostStats) {
-      const cell = element("div", "entity-stat"); cell.append(element("span", null, label), element("strong", null, valueOrUnavailable(value, formatter))); stats.append(cell);
-    }
-    const metadata = element("div", "metadata-list");
-    for (const [key, value] of Object.entries(item.metrics || {}).filter(([, value]) => typeof value === "number" || typeof value === "boolean").slice(0, 8)) metadata.append(element("span", "metadata-chip", `${safeLabel(key)} · ${String(value)}`));
-    card.append(heading, stats);
-    if (metadata.childElementCount) card.append(metadata);
-    card.append(metadataBadges(item, "Host heartbeat", "Fleet"));
-    container.append(card);
-  }
-}
-
-function normalizedSessionStatus(status) {
-  return status === "closed" ? "completed" : safeLabel(status, "unknown").toLowerCase();
-}
-function sessionCost(item) {
-  if (Number.isFinite(Number(item?.costEstimate))) return Number(item.costEstimate);
-  if (Number.isFinite(Number(item?.costMicros))) return Number(item.costMicros) / 1_000_000;
-  return null;
-}
-
-
-function renderSessions() {
-  const body = byId("sessions-body");
-  const items = listFrom(state.observatory.sessions, ["sessions"]);
-  const metrics = byId("sessions-summary-metrics");
-  const tokenValues = items.map((item) => Number(item.totalTokens)).filter(Number.isFinite);
-  const costValues = items.map(sessionCost).filter((value) => value !== null);
-  const available = state.observatory.sessions !== null && !state.observatoryErrors.has("sessions");
-  metrics.replaceChildren(
-    metricCard("Sessions", available ? formatNumber(items.length) : "Unavailable", available ? "Observed OMP sessions" : "Session endpoint unavailable", PALETTE[0]),
-    metricCard("Active", available ? formatNumber(items.filter((item) => normalizedSessionStatus(item.status) === "active").length) : "Unavailable", available ? "Currently executing" : "Session endpoint unavailable", PALETTE[4]),
-    metricCard("Failed", available ? formatNumber(items.filter((item) => normalizedSessionStatus(item.status) === "failed").length) : "Unavailable", available ? "Recorded failures" : "Session endpoint unavailable", PALETTE[3]),
-    metricCard("Tokens", available && tokenValues.length ? formatCompact(tokenValues.reduce((sum, value) => sum + value, 0)) : "Unavailable", available && tokenValues.length ? "Prompt + completion" : "Token usage unsupported", PALETTE[1]),
-    metricCard("Cost signal", available && costValues.length ? formatMoney(costValues.reduce((sum, value) => sum + value, 0), 4) : "Unpriced", available && costValues.length ? "Estimated, not billed" : "Provider pricing unavailable", PALETTE[6]),
-  );
-  body.replaceChildren();
-  const error = state.observatoryErrors.get("sessions");
-  if (error) { const row = element("tr"); const cell = element("td", "meta-cell", error.status === 404 ? "Session telemetry unsupported by this server." : safeLabel(error.message)); cell.colSpan = 11; row.append(cell); body.append(row); return; }
-  const filter = byId("session-status-filter").value;
-  const filtered = items.filter((item) => filter === "all" || normalizedSessionStatus(item.status) === filter);
-  for (const item of filtered) {
-    const row = element("tr");
-    const metadata = metadataBadges(item, "OMP collector", "Session");
-    const metadataCell = element("td", "meta-cell"); metadataCell.append(metadata);
-    row.append(
-      element("td", "session-safe-id", maskedIdentifier(item.sessionId, "Session")),
-      element("td", "host-safe-id", maskedIdentifier(item.hostId, "Host")),
-      element("td", "identity-safe-id", item.identityId ? maskedIdentifier(item.identityId, "Identity") : "Unavailable"),
-    );
-    const statusCell = element("td"); statusCell.append(statusBadge(normalizedSessionStatus(item.status))); row.append(statusCell);
-    row.append(
-      element("td", null, valueOrUnavailable(item.startedAt, (value) => formatDate(value, true))),
-      element("td", null, valueOrUnavailable(item.durationMs, formatDuration)),
-      element("td", null, valueOrUnavailable(item.totalTokens, formatCompact)),
-      element("td", null, valueOrUnavailable(item.toolCallsCount, formatNumber)),
-      element("td", null, valueOrUnavailable(item.errorCount, formatNumber)),
-      element("td", null, valueOrUnavailable(sessionCost(item), (value) => formatMoney(value, 4))),
-      metadataCell,
-    );
-    body.append(row);
-  }
-  if (!filtered.length) { const row = element("tr"); const cell = element("td", "muted", "No matching OMP sessions. Missing values are not interpreted as zero."); cell.colSpan = 11; row.append(cell); body.append(row); }
-}
 
 function policyRules() {
-  return listFrom(state.observatory.policies, ["policies", "rules"]);
+  return listFrom(state.observatory.policies, ["policies", "rules"])
+    .filter((rule) => !/^(host|session):/.test(String(rule.target || "")));
 }
 
 function defaultPolicy() {
@@ -1484,8 +1434,6 @@ function renderActiveView() {
   else if (state.activeView === "quotas") renderQuotas();
   else if (state.activeView === "credentials") renderCredentials();
   else if (state.activeView === "accounts") renderAccountsRoster();
-  else if (state.activeView === "sessions") renderSessions();
-  else if (state.activeView === "hosts") renderHosts();
   else if (state.activeView === "notifications") { renderPolicies(); renderEvents(); }
   else if (state.activeView === "events") renderEvents();
   else if (state.activeView === "health") renderHealthView();
@@ -1494,8 +1442,7 @@ function renderActiveView() {
 async function loadObservatory() {
   const entries = [
     ["overview", "/api/observatory/overview"], ["quotas", "/api/observatory/quotas"], ["identities", "/api/observatory/identities"],
-    ["hosts", "/api/observatory/hosts"], ["sessions", "/api/observatory/sessions"], ["events", "/api/observatory/events"],
-    ["policies", "/api/observatory/policies"], ["health", "/api/observatory/health"],
+    ["events", "/api/observatory/events"], ["policies", "/api/observatory/policies"], ["health", "/api/observatory/health"],
   ];
   const values = await Promise.all(entries.map(([name, path]) => optionalApi(name, path)));
   entries.forEach(([name], index) => { if (values[index] !== null) state.observatory[name] = values[index]; });
@@ -1525,15 +1472,15 @@ const OBSERVATORY_EVENT_TYPES = [
 function eventRefreshFamilies(type) {
   if (/^quota_|^reset_credit_/.test(type)) return ["overview", "quotas", "events"];
   if (/^provider_|^credential_/.test(type)) return ["overview", "identities", "events"];
-  if (/^collector_|^host_/.test(type)) return ["overview", "hosts", "health", "events"];
-  if (/^session_/.test(type)) return ["overview", "sessions", "events"];
+  if (/^collector_|^host_/.test(type)) return ["overview", "health", "events"];
+  if (/^session_/.test(type)) return ["overview", "events"];
   if (/^agentrouter_/.test(type)) return ["overview", "events"];
   if (/policy|digest/.test(type)) return ["policies", "events"];
-  return ["overview", "quotas", "identities", "hosts", "sessions", "events", "policies", "health"];
+  return ["overview", "quotas", "identities", "events", "policies", "health"];
 }
 
 async function refreshObservatoryFamilies(families) {
-  const endpoints = { overview: "/api/observatory/overview", quotas: "/api/observatory/quotas", identities: "/api/observatory/identities", hosts: "/api/observatory/hosts", sessions: "/api/observatory/sessions", events: "/api/observatory/events", policies: "/api/observatory/policies", health: "/api/observatory/health" };
+  const endpoints = { overview: "/api/observatory/overview", quotas: "/api/observatory/quotas", identities: "/api/observatory/identities", events: "/api/observatory/events", policies: "/api/observatory/policies", health: "/api/observatory/health" };
   const names = [...new Set(families)].filter((name) => endpoints[name]);
   const values = await Promise.all(names.map((name) => optionalApi(name, endpoints[name])));
   names.forEach((name, index) => { if (values[index] !== null) state.observatory[name] = values[index]; });
@@ -1559,12 +1506,6 @@ function handleStreamEvent(event) {
   else if (typeof data.eventId === "string") state.sseLastEventId = data.eventId;
   state.sseLastMessageAt = new Date().toISOString();
   const type = safeLabel(data.eventType || data.type || event.type, "observatory_event").toLowerCase().replaceAll("-", "_");
-  const durable = Boolean(data.eventId || event.lastEventId) && data.ephemeral !== true;
-  if (["quota_reset", "confirmed_reset"].includes(type) && durable) {
-    runCelebration(false, "🎉 Weekly Quota Reset Confirmed!", eventPresentation(data).title || "100% capacity restored");
-  } else if (["agentrouter_grant_received", "credit_grant", "grant_confirmed", "balance_increase"].includes(type) && durable) {
-    runCelebration(false, "💰 $25 Daily Grant Confirmed!", eventPresentation(data).detail || "Daily reward awarded to AgentRouter account");
-  }
   scheduleObservatoryRefresh(eventRefreshFamilies(type), 250);
   if (state.activeView === "health") renderHealthView();
 }
@@ -1589,164 +1530,6 @@ function connectObservatoryStream() {
   source.onerror = () => { if (state.sseSource !== source) return; source.close(); state.sseSource = null; state.sseConnectedAt = null; updateSseStatus("reconnecting"); scheduleObservatoryRefresh([], 0); scheduleSseReconnect(); };
 }
 
-function loadCelebrationSettings() {
-  try {
-    const parsed = JSON.parse(localStorage.getItem("ai-fleet-celebration") || "null");
-    const effect = ["fireworks", "confetti", "aurora", "spark", "random", "off"].includes(parsed?.effect) ? parsed.effect : "fireworks";
-    const duration = ["short", "medium", "long"].includes(parsed?.duration) ? parsed.duration : "short";
-    const intensity = ["low", "medium", "high"].includes(parsed?.intensity) ? parsed.intensity : "low";
-    state.celebrationSettings = { effect, duration, intensity };
-  } catch { state.celebrationSettings = { effect: "fireworks", duration: "short", intensity: "low" }; }
-}
-
-function hydrateCelebrationControls() {
-  byId("celebration-effect").value = state.celebrationSettings.effect; byId("celebration-duration").value = state.celebrationSettings.duration; byId("celebration-intensity").value = state.celebrationSettings.intensity;
-}
-
-function celebrationDraftFromControls() {
-  return { effect: byId("celebration-effect").value, duration: byId("celebration-duration").value, intensity: byId("celebration-intensity").value };
-}
-
-function persistCelebrationSettings(settings = celebrationDraftFromControls()) {
-  state.celebrationSettings = settings;
-  try { localStorage.setItem("ai-fleet-celebration", JSON.stringify(settings)); } catch { /* Storage can be disabled. */ }
-}
-function showCelebrationHud(title, detail = "") {
-  let hud = byId("celebration-hud");
-  if (!hud) {
-    hud = document.createElement("div");
-    hud.id = "celebration-hud";
-    hud.className = "celebration-hud";
-    document.body.append(hud);
-  }
-  hud.classList.remove("fading");
-  hud.replaceChildren();
-
-  const badge = document.createElement("span");
-  badge.className = "celebration-hud-badge";
-  badge.textContent = "✦ CELEBRATION ✦";
-
-  const titleEl = document.createElement("h3");
-  titleEl.className = "celebration-hud-title";
-  titleEl.textContent = title;
-
-  hud.append(badge, titleEl);
-
-  if (detail) {
-    const detailEl = document.createElement("p");
-    detailEl.className = "celebration-hud-detail";
-    detailEl.textContent = detail;
-    hud.append(detailEl);
-  }
-
-  clearTimeout(state.celebrationHudTimer);
-  state.celebrationHudTimer = setTimeout(() => {
-    hud.classList.add("fading");
-    setTimeout(() => hud.remove(), 500);
-  }, 4500);
-}
-
-function runCelebration(preview = false, title = "Quota reset confirmed", detail = "") {
-  const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
-  const settings = preview && byId("settings-dialog")?.open ? celebrationDraftFromControls() : state.celebrationSettings;
-  if (settings.effect === "off") { if (preview) showToast("Celebrations are disabled."); return; }
-  if (reduced) { showToast(`${title}. Animation skipped for reduced motion.`); return; }
-  cancelAnimationFrame(state.celebrationFrame);
-  const canvas = byId("celebration-canvas"); const context = canvas.getContext("2d");
-  const dpr = Math.min(devicePixelRatio || 1, 2); canvas.width = Math.round(innerWidth * dpr); canvas.height = Math.round(innerHeight * dpr); context.setTransform(dpr, 0, 0, dpr, 0, 0); canvas.classList.add("active");
-  const effects = ["fireworks", "confetti", "aurora", "spark"]; const effect = settings.effect === "random" ? effects[Math.floor(Math.random() * effects.length)] : settings.effect;
-  const duration = { short: 2_500, medium: 4_500, long: 7_000 }[settings.duration] || 2_500; const count = { low: 48, medium: 96, high: 160 }[settings.intensity] || 48;
-  const colors = ["#c084fc", "#e879f9", "#38bdf8", "#34d399", "#fbbf24", "#f472b6", "#a855f7", "#60a5fa"];
-
-  const burstCount = effect === "fireworks" ? 3 : 1;
-  const bursts = Array.from({ length: burstCount }, (_, bIdx) => ({
-    x: innerWidth * (0.2 + (bIdx / (burstCount + 1)) * 0.6 + (Math.random() - 0.5) * 0.15),
-    y: innerHeight * (0.22 + Math.random() * 0.28),
-    delay: bIdx * 350,
-  }));
-
-  const particles = Array.from({ length: count }, (_, index) => {
-    const burst = bursts[index % bursts.length];
-    const angle = Math.random() * Math.PI * 2;
-    const speed = 2 + Math.random() * 6.5;
-    return {
-      burst,
-      x: effect === "confetti" ? Math.random() * innerWidth : burst.x,
-      y: effect === "confetti" ? -Math.random() * (innerHeight * 0.4) : burst.y,
-      vx: Math.cos(angle) * speed,
-      vy: effect === "confetti" ? 1.2 + Math.random() * 3.5 : Math.sin(angle) * speed,
-      size: 2.5 + Math.random() * 5,
-      color: colors[index % colors.length],
-      phase: Math.random() * Math.PI * 2,
-      sparkle: Math.random() > 0.4,
-    };
-  });
-
-  const started = performance.now();
-  const frame = (now) => {
-    const elapsed = now - started;
-    const progress = elapsed / duration;
-    context.clearRect(0, 0, innerWidth, innerHeight);
-
-    if (effect === "aurora") {
-      context.globalAlpha = Math.sin(Math.min(1, progress) * Math.PI) * 0.32;
-      for (let band = 0; band < 5; band += 1) {
-        const gradient = context.createLinearGradient(0, 0, innerWidth, innerHeight);
-        gradient.addColorStop(0, colors[band % colors.length]);
-        gradient.addColorStop(1, colors[(band + 2) % colors.length]);
-        context.strokeStyle = gradient;
-        context.lineWidth = 60;
-        context.beginPath();
-        for (let x = -40; x <= innerWidth + 40; x += 25) {
-          const y = innerHeight * (0.2 + band * 0.13) + Math.sin(x * 0.008 + now * 0.002 + band) * 80;
-          if (x === -40) context.moveTo(x, y);
-          else context.lineTo(x, y);
-        }
-        context.stroke();
-      }
-    } else {
-      context.globalAlpha = Math.max(0, 1 - progress);
-      for (const particle of particles) {
-        if (elapsed < particle.burst.delay && effect === "fireworks") continue;
-        particle.x += particle.vx;
-        particle.y += particle.vy;
-        particle.vy += effect === "confetti" ? 0.02 : 0.045;
-        particle.vx *= 0.985;
-        particle.phase += 0.15;
-
-        context.fillStyle = particle.color;
-        context.save();
-        context.translate(particle.x, particle.y);
-        context.rotate(particle.phase);
-
-        if (effect === "confetti") {
-          context.fillRect(-particle.size, -particle.size / 2, particle.size * 2.4, particle.size);
-        } else {
-          context.beginPath();
-          const radius = particle.size * Math.max(0.2, 1 - progress * 0.6);
-          if (particle.sparkle && Math.sin(particle.phase * 3) > 0) {
-            context.shadowBlur = 12;
-            context.shadowColor = particle.color;
-          }
-          context.arc(0, 0, radius, 0, Math.PI * 2);
-          context.fill();
-        }
-        context.restore();
-      }
-    }
-
-    if (elapsed < duration) {
-      state.celebrationFrame = requestAnimationFrame(frame);
-    } else {
-      context.clearRect(0, 0, innerWidth, innerHeight);
-      canvas.classList.remove("active");
-    }
-  };
-
-  state.celebrationFrame = requestAnimationFrame(frame);
-  showCelebrationHud(preview ? `Previewing ${effect} celebration` : title, preview ? "Celebration animation preview" : detail);
-  showToast(preview ? `Previewing ${effect} celebration.` : title);
-}
 
 let liveTickerTimer = null;
 let liveTickerInFlight = false;
@@ -1781,32 +1564,23 @@ function updateLiveCountdowns() {
 function applyLiveSnapshot(live) {
   if (!live || typeof live !== "object") return;
   state.lastLiveSnapshot = live;
-
-  if (Array.isArray(live.agentrouter)) {
-    for (const acc of live.agentrouter) {
-      const known = state.knownBalances?.[acc.accountId];
-      if (known !== undefined && acc.balance !== null && acc.balance > known) {
-        const delta = (acc.balance - known).toFixed(2);
-        runCelebration(
-          false,
-          `💰 AgentRouter +$${delta} Grant Confirmed!`,
-          `Account: ${acc.accountLabel} · New Balance: $${acc.balance.toFixed(2)} · Fleet Total: $${live.totals?.totalBalance?.toFixed(2) || "0.00"}`
-        );
-      }
-      state.knownBalances = state.knownBalances || {};
-      if (acc.balance !== null) state.knownBalances[acc.accountId] = acc.balance;
-    }
-  }
-
+  if (Array.isArray(live.quotas)) state.observatory.quotas = { quotas: live.quotas };
+  if (Array.isArray(live.identities)) state.observatory.identities = { identities: live.identities };
   if (live.totals) {
+    state.observatory.overview = { totals: {
+      identities: live.totals.identitiesCount,
+      warningQuotas: live.totals.warningQuotasCount,
+    } };
     const sseChip = byId("sse-state");
     if (sseChip && !sseChip.classList.contains("error")) {
       const label = sseChip.querySelector("span");
       if (label) label.textContent = "Live: 1s sync";
     }
   }
+  if (state.activeView === "overview") renderObservatoryOverview();
+  else if (state.activeView === "quotas") renderQuotas();
+  else if (state.activeView === "credentials") renderCredentials();
 }
-
 function startLiveTicker() {
   if (liveTickerTimer) clearInterval(liveTickerTimer);
   liveTickerTimer = setInterval(async () => {
@@ -1935,7 +1709,7 @@ function setActiveViewNavigation(name) {
 }
 
 function showView(name, options = {}) {
-  const valid = new Set(["overview", "quotas", "credentials", "accounts", "sessions", "hosts", "notifications", "events", "health"]);
+  const valid = new Set(["overview", "quotas", "credentials", "accounts", "notifications", "events", "health"]);
   if (!valid.has(name)) name = "overview";
   if (state.selectedId !== null) state.revealedTokens.clear();
   state.selectedId = null;
@@ -2022,15 +1796,14 @@ async function saveAccount(event) {
 
 function openSettingsDialog() {
   const automation = state.settings?.automation; if (!automation) return;
-  byId("interval-minutes").value = automation.intervalMinutes; byId("endpoint-poll-interval").value = automation.endpointPollIntervalMinutes; byId("account-delay-seconds").value = automation.accountDelaySeconds; byId("two-factor-timeout").value = automation.twoFactorTimeoutMinutes; byId("activity-lookback").value = automation.activityLookbackDays; byId("scheduler-enabled").checked = automation.schedulerEnabled; byId("endpoint-polling-enabled").checked = automation.endpointPollingEnabled; byId("run-on-start").checked = automation.runOnStart; byId("open-on-start").checked = automation.openDashboardOnStart; byId("capture-screenshots").checked = automation.captureScreenshots; hydrateCelebrationControls(); byId("settings-error").textContent = ""; showModal(byId("settings-dialog"), byId("interval-minutes"));
+  byId("interval-minutes").value = automation.intervalMinutes; byId("endpoint-poll-interval").value = automation.endpointPollIntervalMinutes; byId("account-delay-seconds").value = automation.accountDelaySeconds; byId("two-factor-timeout").value = automation.twoFactorTimeoutMinutes; byId("activity-lookback").value = automation.activityLookbackDays; byId("scheduler-enabled").checked = automation.schedulerEnabled; byId("endpoint-polling-enabled").checked = automation.endpointPollingEnabled; byId("run-on-start").checked = automation.runOnStart; byId("open-on-start").checked = automation.openDashboardOnStart; byId("capture-screenshots").checked = automation.captureScreenshots; byId("settings-error").textContent = ""; showModal(byId("settings-dialog"), byId("interval-minutes"));
 }
 
 async function saveSettings(event) {
   event.preventDefault();
-  const celebrationDraft = celebrationDraftFromControls();
   try {
     const result = await api("/api/settings", { method: "PUT", body: { intervalMinutes: Number(byId("interval-minutes").value), endpointPollIntervalMinutes: Number(byId("endpoint-poll-interval").value), accountDelaySeconds: Number(byId("account-delay-seconds").value), twoFactorTimeoutMinutes: Number(byId("two-factor-timeout").value), activityLookbackDays: Number(byId("activity-lookback").value), schedulerEnabled: byId("scheduler-enabled").checked, endpointPollingEnabled: byId("endpoint-polling-enabled").checked, runOnStart: byId("run-on-start").checked, openDashboardOnStart: byId("open-on-start").checked, browserHeadless: state.settings.automation.browserHeadless, captureScreenshots: byId("capture-screenshots").checked } });
-    persistCelebrationSettings(celebrationDraft); state.settings.automation = result.automation; closeModal(byId("settings-dialog")); showToast("Automation and celebration settings saved."); await loadCore(false);
+    state.settings.automation = result.automation; closeModal(byId("settings-dialog")); showToast("Automation settings saved."); await loadCore(false);
   } catch (error) { byId("settings-error").textContent = error.message; }
 }
 
@@ -2109,8 +1882,9 @@ function bindEvents() {
   byId("brand-home").addEventListener("click", showOverview); byId("back-overview").addEventListener("click", showOverview);
   document.querySelectorAll(".views-nav [data-view]").forEach((button) => button.addEventListener("click", () => showView(button.dataset.view)));
   for (const id of ["add-account", "rail-add", "onboarding-add", "accounts-add-btn"]) byId(id).addEventListener("click", () => openAccountDialog());
-  byId("close-settings").addEventListener("click", () => { hydrateCelebrationControls(); closeModal(byId("settings-dialog")); }); byId("cancel-settings").addEventListener("click", () => { hydrateCelebrationControls(); closeModal(byId("settings-dialog")); }); byId("settings-dialog").addEventListener("close", hydrateCelebrationControls); byId("settings-form").addEventListener("submit", saveSettings);
+  byId("close-settings").addEventListener("click", () => closeModal(byId("settings-dialog"))); byId("cancel-settings").addEventListener("click", () => closeModal(byId("settings-dialog"))); byId("settings-form").addEventListener("submit", saveSettings);
   for (const id of ["open-settings", "hero-settings"]) byId(id).addEventListener("click", openSettingsDialog);
+  byId("overview-open-quotas").addEventListener("click", () => showView("quotas"));
   for (const id of ["run-all", "hero-run"]) byId(id).addEventListener("click", () => runChecks());
   for (const id of ["stop-all", "challenge-stop"]) byId(id).addEventListener("click", stopChecks);
   byId("run-account").addEventListener("click", () => runChecks(state.selectedId)); byId("copy-api-token").addEventListener("click", copySelectedApiToken); byId("reveal-api-token").addEventListener("click", () => revealApiToken(state.selectedId)); byId("hide-api-token").addEventListener("click", () => hideApiToken(state.selectedId));
@@ -2124,11 +1898,10 @@ function bindEvents() {
   byId("dismiss-run").addEventListener("click", () => { const coordinator = state.coordinator || {}; state.liveConsoleDismissedKey = traceCycleKey(coordinator); clearLiveConsoleTimers(); byId("run-console").classList.add("hidden"); document.body.classList.remove("trace-active"); });
   byId("usage-granularity").addEventListener("change", () => state.selectedId && selectAccount(state.selectedId));
   for (const tab of document.querySelectorAll(".data-tab")) { tab.addEventListener("click", () => activateTab(tab)); tab.addEventListener("keydown", handleTabKeydown); }
-  for (const [id, render] of [["quota-provider-filter", renderQuotas], ["quota-status-filter", renderQuotas], ["credential-health-filter", renderCredentials], ["session-status-filter", renderSessions], ["host-status-filter", renderHosts], ["event-severity-filter", renderEvents]]) byId(id).addEventListener("change", render);
-  for (const [id, endpoint] of [["refresh-quotas-btn", "quotas"], ["refresh-credentials-btn", "identities"], ["refresh-sessions-btn", "sessions"], ["refresh-hosts-btn", "hosts"], ["refresh-events-btn", "events"], ["refresh-health-btn", "health"]]) byId(id).addEventListener("click", async () => {
+  for (const [id, render] of [["quota-provider-filter", renderQuotas], ["quota-status-filter", renderQuotas], ["credential-health-filter", renderCredentials], ["event-severity-filter", renderEvents]]) byId(id).addEventListener("change", render);
+  for (const [id, endpoint] of [["refresh-quotas-btn", "quotas"], ["refresh-credentials-btn", "identities"], ["refresh-events-btn", "events"], ["refresh-health-btn", "health"]]) byId(id).addEventListener("click", async () => {
     const payload = await optionalApi(endpoint, `/api/observatory/${endpoint}`); if (payload !== null) state.observatory[endpoint] = payload; renderActiveView();
   });
-  for (const id of ["preview-celebration-btn", "test-celebration"]) byId(id).addEventListener("click", () => runCelebration(true));
   for (const dialog of document.querySelectorAll("dialog")) bindDialogFocus(dialog);
   const logoutBtn = byId("logout-btn");
   if (logoutBtn) {
@@ -2163,7 +1936,7 @@ async function refresh() {
 
 async function initialize() {
   if (typeof Chart !== "undefined") { Chart.defaults.color = "#c5b8d5"; Chart.defaults.font.family = getComputedStyle(document.documentElement).fontFamily; Chart.defaults.devicePixelRatio = Math.min(window.devicePixelRatio || 1, 1.5); }
-  loadCelebrationSettings(); hydrateCelebrationControls(); initializeTabs(); bindEvents();
+  initializeTabs(); bindEvents();
   try { await loadCore(false); } catch (error) { showToast(error.message, true); }
   await loadObservatory();
   connectObservatoryStream();

@@ -5,7 +5,6 @@ const assert = (condition, message) => { if (!condition) throw new Error(message
 const views = [
   ["overview", "#overview-nav", "#overview-view"], ["quotas", "#nav-quotas", "#quotas-view"],
   ["credentials", "#nav-credentials", "#credentials-view"], ["accounts", "#nav-accounts", "#accounts-view"],
-  ["sessions", "#nav-sessions", "#sessions-view"], ["hosts", "#nav-hosts", "#hosts-view"],
   ["notifications", "#nav-notifications", "#notifications-view"], ["events", "#nav-events", "#events-view"],
   ["health", "#nav-health", "#health-view"],
 ];
@@ -33,12 +32,18 @@ try {
     globalThis.EventSource = SilentEventSource;
   });
   const observedAt = new Date().toISOString();
+  const identities = [
+    { identityId: "identity-openai", kind: "credential", provider: "openai-codex", label: "Primary ChatGPT", health: "healthy", observedAt },
+    ...Array.from({ length: 10 }, (_, index) => ({ identityId: `identity-ag-${index}`, kind: "credential", provider: "google-antigravity", label: `Antigravity ${index + 1}`, health: "healthy", observedAt })),
+  ];
+  const quotaWindows = [
+    ...Array.from({ length: 3 }, (_, index) => ({ identityId: "identity-openai", provider: "openai-codex", windowId: `openai-${index}`, resetLabel: `OpenAI ${index + 1}`, usedFraction: .82, remainingFraction: .18, status: "warning", observedAt })),
+    ...Array.from({ length: 34 }, (_, index) => ({ identityId: `identity-ag-${index % 10}`, provider: "google-antigravity", windowId: `ag-${index}`, resetLabel: `Antigravity ${index + 1}`, usedFraction: .31, remainingFraction: .69, status: "ok", observedAt })),
+  ];
   const fixture = {
-    overview: { generatedAt: observedAt, totals: { hostCount: 1, onlineHosts: 1, identityCount: 1, activeSessions: 0, warningQuotas: 1 } },
-    quotas: { quotaWindows: [{ provider: "openai-codex", windowId: "quota-window-perf", resetLabel: "Five-hour limit", usedFraction: .82, remainingFraction: .18, status: "warning", observedAt }] },
-    identities: { identities: [{ identityId: "identity-perf", kind: "openai-codex", label: "Primary", health: "healthy", observedAt }] },
-    hosts: { hosts: [{ hostId: "host-perf", operatorLabel: "Performance Host", collectorVersion: "2.1", status: "online", observedAt }] },
-    sessions: { sessions: [{ sessionId: "session-perf", hostId: "host-perf", status: "closed", startedAt: observedAt, closedAt: observedAt, totalTokens: 20, collectedAt: observedAt }] },
+    overview: { generatedAt: observedAt, totals: { identities: 11, warningQuotas: 3 } },
+    quotas: { quotaWindows },
+    identities: { identities },
     events: { events: [{ eventId: "event-perf", eventType: "quota_warning", severity: "warning", occurredAt: observedAt, provider: "openai-codex", windowId: "quota-window-perf" }], audit: [] },
     policies: { policies: [{ policyId: "global-perf", target: "global", enabled: true, silenced: false, telegramImmediate: true, dashboardOnly: false, minSeverity: "warning", thresholds: { warningRemainingFraction: .2, criticalRemainingFraction: .1, exhaustedRemainingFraction: .02, hysteresisFraction: .02 }, cooldownMinutes: 15, throttleIntervalMs: 60000, channels: ["default"], quietHoursEnabled: false, quietHoursTimezone: "UTC", quietHoursStart: null, quietHoursEnd: null, criticalBypassQuietHours: true, digestEnabled: false, digestIntervalMinutes: null, digestSchedule: null, digestTimezone: "UTC", recipient: null, matchEventTypes: [], matchHostIds: [], matchIdentityIds: [], updatedAt: observedAt }], deliveries: [] },
     health: { status: "ok", generatedAt: observedAt, uptimeSeconds: 100, schedulerActive: true, services: [] },
@@ -46,11 +51,15 @@ try {
   await page.route("**/api/observatory/**", async (route) => {
     const name = new URL(route.request().url()).pathname.split("/").pop();
     if (name === "stream") return route.abort();
+    if (name === "live") {
+      const liveQuotas = quotaWindows.map((quota) => ({ ...quota, usedFraction: .42, remainingFraction: .58, status: "ok" }));
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ timestamp: observedAt, totals: { identitiesCount: 11, warningQuotasCount: 0 }, quotas: liveQuotas, identities, agentrouter: [] }) });
+    }
     const body = fixture[name]; return route.fulfill({ status: body ? 200 : 404, contentType: "application/json", body: JSON.stringify(body || { error: "Unsupported" }) });
   });
   await page.goto(baseUrl, { waitUntil: "networkidle" });
   await page.locator("#overview-money-chart").waitFor({ state: "visible" });
-  await page.waitForTimeout(800);
+  await page.waitForTimeout(1_100);
 
   const overview = await page.evaluate(() => {
     const navigation = performance.getEntriesByType("navigation")[0];
@@ -68,6 +77,8 @@ try {
   });
   assert(overview.activeCharts === 3, `overview retained ${overview.activeCharts} charts instead of 3`);
   assert(overview.credentials.length > 0 && overview.credentials.every((value) => value === "same-origin"), "API fetches did not preserve same-origin credentials");
+  assert(await page.locator("#overview-provider-accounts .provider-account-card").count() === 11, "overview did not render all 11 broker identities");
+  assert((await page.locator("#overview-provider-accounts").innerText()).includes("42%"), "overview did not apply the live quota snapshot");
 
   for (const [name, selector, panel] of views.slice(1)) {
     await page.locator(selector).click();

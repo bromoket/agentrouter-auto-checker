@@ -6,7 +6,7 @@ import type { AppConfig } from "./config";
 import { createDashboardAuth } from "./dashboard-auth";
 import type { RunSnapshot } from "./storage";
 import { Store } from "./storage";
-import { TelegramNotifier } from "./telegram";
+import { buildQuotasMessages, TelegramNotifier } from "./telegram";
 const resources: Array<{ directory: string; store: Store }> = [];
 
 function config(stateFilePath: string, overrides: Partial<AppConfig["telegram"]> = {}): AppConfig {
@@ -396,5 +396,57 @@ describe("TelegramNotifier", () => {
 
     const messages = telegram.calls.filter((call) => call.method === "sendMessage");
     expect(messages).toHaveLength(4);
+  });
+  test("quota command formatter covers a complete broker inventory", () => {
+    const quotas = Array.from({ length: 37 }, (_, index) => ({
+      provider: index < 3 ? "openai-codex" : "google-antigravity",
+      identityLabel: index < 3 ? "ChatGPT" : `Antigravity ${Math.floor((index - 3) / 4) + 1}`,
+      windowName: `weekly-window-${index}`,
+      usedPct: index % 101,
+      resetsAt: "2026-09-07T12:00:00.000Z",
+      status: "ok",
+    }));
+    const pages = buildQuotasMessages({
+      quotas,
+      dashboardUrl: "https://dashboard.example/observatory/",
+    });
+    expect(pages.length).toBeGreaterThan(0);
+    expect(pages.every((page) => page.length <= 4_096)).toBe(true);
+    const combined = pages.join("\n");
+    expect(combined).toContain("OpenAI Codex / ChatGPT");
+    expect(combined).toContain("Google Antigravity");
+    expect(combined).toContain("weekly-window-36");
+  });
+  test("quota formatter hard-bounds one oversized identity and dashboard URL", () => {
+    const quotas = Array.from({ length: 200 }, (_, index) => ({
+      provider: "google-antigravity",
+      identityLabel: "identity-" + "&".repeat(10_000),
+      windowName: `window-${index}-` + "&".repeat(10_000),
+      usedPct: 50,
+      resetsAt: "2026-09-07T12:00:00.000Z",
+      status: "ok",
+    }));
+    const pages = buildQuotasMessages({
+      quotas,
+      dashboardUrl: `https://dashboard.example/?q=${"&".repeat(450)}`,
+    });
+    expect(pages.length).toBeGreaterThan(1);
+    expect(pages.every((page) => page.length <= 4_096)).toBe(true);
+    expect(pages.join("\n")).toContain("window-199");
+  });
+  test("quota formatter safely groups prototype-like provider names", () => {
+    const pages = buildQuotasMessages({
+      quotas: [{
+        provider: "__proto__",
+        identityLabel: "x",
+        windowName: "w",
+        usedPct: 0,
+        status: "ok",
+      }],
+      dashboardUrl: "x",
+    });
+    expect(pages).toHaveLength(1);
+    expect(pages[0]).toContain("__proto__");
+    expect(pages[0].length).toBeLessThanOrEqual(4_096);
   });
 });

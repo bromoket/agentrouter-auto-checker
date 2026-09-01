@@ -17,8 +17,6 @@ const views = [
   ["quotas", "#nav-quotas", "#quotas-view"],
   ["credentials", "#nav-credentials", "#credentials-view"],
   ["accounts", "#nav-accounts", "#accounts-view"],
-  ["sessions", "#nav-sessions", "#sessions-view"],
-  ["hosts", "#nav-hosts", "#hosts-view"],
   ["notifications", "#nav-notifications", "#notifications-view"],
   ["events", "#nav-events", "#events-view"],
   ["health", "#nav-health", "#health-view"],
@@ -64,7 +62,7 @@ async function installBrowserProbes(page) {
 }
 async function installObservatoryFixtures(page) {
   const now = new Date().toISOString();
-  const capture = { policyPut: null, reads: [] };
+  const capture = { policyPut: null, reads: [], liveReads: 0 };
   let policies = [{
     policyId: "policy-global", target: "global", enabled: true, silenced: false, telegramImmediate: true, dashboardOnly: false,
     minSeverity: "warning", thresholds: { warningRemainingFraction: .2, criticalRemainingFraction: .1, exhaustedRemainingFraction: .02, hysteresisFraction: .02 },
@@ -72,18 +70,29 @@ async function installObservatoryFixtures(page) {
     quietHoursTimezone: "UTC", quietHoursStart: null, quietHoursEnd: null, criticalBypassQuietHours: true, digestEnabled: false,
     digestIntervalMinutes: null, digestSchedule: null, digestTimezone: "UTC", recipient: null, matchEventTypes: [], matchHostIds: [], matchIdentityIds: [], updatedAt: now,
   }];
+  const identities = [
+    { identityId: "identity-openai", kind: "credential", provider: "openai-codex", label: "Primary ChatGPT", health: "healthy", activeModel: "gpt-public", source: "broker", observedAt: now },
+    ...Array.from({ length: 10 }, (_, index) => ({ identityId: `identity-ag-${index}`, kind: "credential", provider: "google-antigravity", label: `Antigravity ${index + 1}`, health: "healthy", activeModel: "gemini-public", source: "broker", observedAt: now })),
+  ];
+  const quotaWindows = [
+    ...Array.from({ length: 3 }, (_, index) => ({ identityId: "identity-openai", provider: "openai-codex", windowId: `openai-window-${index}`, resetLabel: `OpenAI window ${index + 1}`, usedFraction: .84, remainingFraction: .16, resetsAt: now, status: "warning", source: "broker", observedAt: now })),
+    ...Array.from({ length: 34 }, (_, index) => ({ identityId: `identity-ag-${index % 10}`, provider: "google-antigravity", windowId: `ag-window-${index}`, resetLabel: `Antigravity window ${index + 1}`, usedFraction: .32, remainingFraction: .68, resetsAt: now, status: "ok", source: "broker", observedAt: now })),
+  ];
   const payloads = {
-    overview: { generatedAt: now, totals: { hostCount: 1, onlineHosts: 1, identityCount: 1, activeSessions: 0, warningQuotas: 1 } },
-    quotas: { quotaWindows: [{ provider: "openai-codex", windowId: "raw-window-secret-1234", resetLabel: "Five-hour limit", usedFraction: .84, remainingFraction: .16, resetsAt: now, status: "warning", source: "collector", scope: "provider", observedAt: now }] },
-    identities: { identities: [{ identityId: "raw-identity-secret-4567", kind: "openai-codex", label: "Primary Codex", hostId: "raw-host-secret-8910", health: "healthy", activeModel: "gpt-public", source: "collector", observedAt: now }] },
-    hosts: { hosts: [{ hostId: "raw-host-secret-8910", operatorLabel: "Workstation Alpha", collectorVersion: "2.1.0", status: "online", activeSessionsCount: 0, activeIdentitiesCount: 1, source: "heartbeat", observedAt: now }] },
-    sessions: { sessions: [{ sessionId: "raw-session-secret-2468", hostId: "raw-host-secret-8910", identityId: "raw-identity-secret-4567", status: "closed", startedAt: now, closedAt: now, durationMs: 1200, totalTokens: 42, toolCallsCount: 2, errorCount: 0, costMicros: 1200, costTrust: "estimated", source: "omp", collectedAt: now }] },
+    overview: { generatedAt: now, totals: { identities: 11, warningQuotas: 3 } },
+    quotas: { quotaWindows },
+    identities: { identities },
     events: { events: [{ eventId: "raw-event-secret-1357", eventType: "quota_warning", severity: "warning", occurredAt: now, title: "raw-identity-secret-4567 at C:\\private\\secret", message: "https://token.invalid/raw-session-secret-2468", fingerprint: "raw-fingerprint-secret-1111", provider: "openai-codex", windowId: "raw-window-secret-1234", source: "event-bus" }], audit: [{ auditId: "raw-audit-secret-2222", action: "upsert_policy", actor: "dashboard_owner", targetType: "policy", targetId: "provider:openai-codex", occurredAt: now, details: { path: "C:\\private\\secret" } }] },
     health: { status: "ok", generatedAt: now, uptimeSeconds: 120, schedulerActive: true, services: [{ name: "Observatory API", status: "online", message: "Ready" }] },
   };
   await page.route("**/api/observatory/**", async (route) => {
     const request = route.request(); const url = new URL(request.url()); const name = url.pathname.split("/").pop();
     if (name === "stream") return route.abort();
+    if (name === "live") {
+      capture.reads.push(name); capture.liveReads += 1;
+      const liveQuotas = quotaWindows.map((quota) => ({ ...quota, usedFraction: .42, remainingFraction: .58, status: "ok", observedAt: new Date().toISOString() }));
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ timestamp: new Date().toISOString(), totals: { identitiesCount: 11, warningQuotasCount: 0 }, quotas: liveQuotas, identities, agentrouter: [] }) });
+    }
     if (name === "policies" && request.method() === "PUT") {
       capture.policyPut = request.postDataJSON();
       const rule = capture.policyPut?.policy;
@@ -118,16 +127,17 @@ async function validateNineViews(page, contextLabel) {
 }
 
 async function validateObservatoryContracts(page, capture, viewport, contextLabel) {
-  for (const [nav, panel] of [["#nav-quotas", "#quotas-view"], ["#nav-credentials", "#credentials-view"], ["#nav-sessions", "#sessions-view"], ["#nav-events", "#events-view"]]) {
+  for (const [nav, panel] of [["#nav-quotas", "#quotas-view"], ["#nav-credentials", "#credentials-view"], ["#nav-events", "#events-view"]]) {
     await page.locator(nav).click(); await page.locator(panel).waitFor({ state: "visible" });
   }
   const publicText = (await page.locator("body").textContent()).toLowerCase();
   for (const secret of ["raw-window-secret", "raw-identity-secret", "raw-host-secret", "raw-session-secret", "raw-event-secret", "c:\\private", "token.invalid"]) assert(!publicText.includes(secret), `${contextLabel}: rendered protected fixture value ${secret}`);
-  await page.locator("#nav-hosts").click();
-  assert((await page.locator("#hosts-view").innerText()).includes("Workstation Alpha"), `${contextLabel}: operatorLabel was not rendered`);
-  assert((await page.locator("#hosts-view").innerText()).includes("2.1.0"), `${contextLabel}: collectorVersion was not rendered`);
-  await page.locator("#nav-sessions").click();
-  assert((await page.locator("#sessions-view").innerText()).toLowerCase().includes("completed"), `${contextLabel}: closed session was not normalized`);
+  await page.locator("#overview-nav").click();
+  await page.locator("#overview-view").waitFor({ state: "visible" });
+  assert(await page.locator("#overview-provider-accounts .provider-account-card").count() === 11, `${contextLabel}: broker identity cards did not render 11 accounts`);
+  await page.waitForTimeout(1_100);
+  assert(capture.liveReads > 0, `${contextLabel}: live endpoint was not polled`);
+  assert((await page.locator("#overview-provider-accounts").innerText()).includes("42%"), `${contextLabel}: live quota snapshot was not applied`);
 
   await page.locator("#nav-events").click();
   const eventsTab = page.locator('[role="tab"][aria-controls="events-tab"]');
@@ -193,11 +203,6 @@ async function validateLegacyWorkflows(page, viewport, contextLabel) {
   await page.locator("#open-settings").click();
   await page.locator("#settings-dialog").waitFor({ state: "visible" });
   assert(await page.locator("#settings-dialog").getAttribute("aria-modal") === "true", `${contextLabel}: settings dialog lacks aria-modal`);
-  for (const value of ["fireworks", "confetti", "aurora", "spark", "random", "off"]) {
-    assert(await page.locator(`#celebration-effect option[value="${value}"]`).count() === 1, `${contextLabel}: ${value} celebration option missing`);
-  }
-  assert(await page.locator("#celebration-duration").inputValue() === "short", `${contextLabel}: celebration duration is not short by default`);
-  assert(await page.locator("#celebration-intensity").inputValue() === "low", `${contextLabel}: celebration intensity is not low by default`);
   const dialogBox = await page.locator("#settings-dialog").boundingBox();
   assert(dialogBox && dialogBox.width <= viewport.width, `${contextLabel}: settings dialog overflows`);
   await page.locator("#close-settings").focus(); await page.keyboard.press("Shift+Tab");
@@ -236,28 +241,14 @@ async function validateRealtimeAndReducedMotion(page, capture, contextLabel) {
   assert(sourceOptions.withCredentials === true, `${contextLabel}: SSE does not include same-origin credentials`);
   assert(sourceOptions.credentials.length > 0 && sourceOptions.credentials.every((value) => value === "same-origin"), `${contextLabel}: API fetch omitted same-origin credentials`);
 
-  await page.evaluate(() => globalThis.__fakeSseLatest.emit("quota_reset", { eventType: "quota_reset" }, ""));
-  await page.waitForTimeout(50);
-  assert(!(await page.locator("#celebration-canvas").getAttribute("class")).includes("active"), `${contextLabel}: non-durable reset animated`);
-
-  await page.evaluate(() => globalThis.__fakeSseLatest.emit("quota_reset", { eventType: "quota_reset", eventId: "evt-reset-1", durable: true, title: "Quota reset confirmed" }, "evt-reset-1"));
-  await page.locator("#toast").waitFor({ state: "visible" });
-  const toast = (await page.locator("#toast").innerText()).toLowerCase();
-  assert(toast.includes("reduced motion"), `${contextLabel}: reduced-motion reset did not use static feedback`);
-  assert(!(await page.locator("#celebration-canvas").getAttribute("class")).includes("active"), `${contextLabel}: reduced-motion reset animated`);
-
-  await page.locator("#preview-celebration-btn").click();
-  assert((await page.locator("#toast").innerText()).toLowerCase().includes("reduced motion"), `${contextLabel}: preview ignored reduced motion`);
   const familyReadStart = capture.reads.length;
   await page.evaluate(() => {
     globalThis.__fakeSseLatest.emit("quota_warning", { eventType: "quota_warning", eventId: "evt-warning-2", provider: "openai-codex" }, "evt-warning-2");
-    globalThis.__fakeSseLatest.emit("session_started", { eventType: "session_started", eventId: "evt-session-3", sessionId: "raw-session-secret-9999" }, "evt-session-3");
-    globalThis.__fakeSseLatest.emit("host_offline", { eventType: "host_offline", eventId: "evt-host-4", hostId: "raw-host-secret-9999" }, "evt-host-4");
     globalThis.__fakeSseLatest.emit("policy_changed", { eventType: "policy_changed", eventId: "evt-policy-5" }, "evt-policy-5");
   });
   await page.waitForTimeout(400);
   const refreshed = new Set(capture.reads.slice(familyReadStart));
-  for (const family of ["quotas", "sessions", "hosts", "policies", "events"]) assert(refreshed.has(family), `${contextLabel}: named SSE did not refresh ${family}`);
+  for (const family of ["quotas", "policies", "events"]) assert(refreshed.has(family), `${contextLabel}: named SSE did not refresh ${family}`);
 
   const before = await page.evaluate(() => globalThis.__apiFetchCredentials.length);
   await page.evaluate(() => globalThis.__fakeSseLatest.fail());
@@ -274,18 +265,6 @@ async function validateRealtimeAndReducedMotion(page, capture, contextLabel) {
   assert(reconnect.count - before <= 10, `${contextLabel}: polling fallback was unbounded (${reconnect.count - before} requests)`);
 }
 
-async function validateSavedOffCelebration(browser) {
-  const context = await browser.newContext({ viewport: { width: 1024, height: 768 }, reducedMotion: "no-preference" });
-  const page = await context.newPage();
-  await installObservatoryFixtures(page); await installBrowserProbes(page);
-  await page.addInitScript(() => localStorage.setItem("ai-fleet-celebration", JSON.stringify({ effect: "off", duration: "long", intensity: "high" })));
-  await page.goto(baseUrl, { waitUntil: "networkidle" });
-  assert(await page.locator("#celebration-effect").inputValue() === "off", "saved Off celebration was not hydrated");
-  await page.evaluate(() => globalThis.__fakeSseLatest.emit("quota_reset", { eventType: "quota_reset", eventId: "evt-off-reset", provider: "openai-codex" }, "evt-off-reset"));
-  await page.waitForTimeout(100);
-  assert(!(await page.locator("#celebration-canvas").getAttribute("class")).includes("active"), "saved Off celebration animated without reduced motion");
-  await context.close();
-}
 async function validateBrowser(name, browserType) {
 
   let browser;
@@ -330,7 +309,6 @@ async function validateBrowser(name, browserType) {
       await context.close();
       process.stdout.write(`ok ${contextLabel}\n`);
     }
-    if (name === "chromium" && (!requestedViewport || requestedViewport === "desktop")) await validateSavedOffCelebration(browser);
   } finally {
     await browser.close();
   }

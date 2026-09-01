@@ -184,7 +184,6 @@ export function buildStatusMessage(params: {
     usedPct: number;
     resetsIn: string;
   }>;
-  hostsOnline: number;
   dashboardUrl?: string;
 }): string {
   const dashUrl = params.dashboardUrl || "https://bkserver.tailbbaa91.ts.net/observatory/";
@@ -214,13 +213,21 @@ export function buildStatusMessage(params: {
   }
   lines.push(`• <b>Warnings / High Usage:</b> ${params.quotasSummary.warningCount === 0 ? "None (All nominal)" : `${params.quotasSummary.warningCount} active`}`);
   lines.push(``);
-  lines.push(`🖥 <b>Fleet Hosts:</b> ${params.hostsOnline} online`);
-  lines.push(``);
   lines.push(`👉 <a href="${escapeHtml(dashUrl)}">Open Fleet Observatory</a>`);
   return lines.join("\n");
 }
 
-export function buildQuotasMessage(params: {
+function escapeTelegramText(value: unknown, maxLength: number): string {
+  let escaped = "";
+  for (const character of String(value)) {
+    const next = escapeHtml(character);
+    if (escaped.length + next.length > maxLength) break;
+    escaped += next;
+  }
+  return escaped;
+}
+
+interface TelegramQuotaMessageParams {
   quotas: Array<{
     provider: string;
     identityLabel: string;
@@ -230,34 +237,72 @@ export function buildQuotasMessage(params: {
     status: string;
   }>;
   dashboardUrl?: string;
-}): string {
-  const dashUrl = params.dashboardUrl || "https://bkserver.tailbbaa91.ts.net/observatory/";
-  const lines: string[] = [
-    `🤖 <b>AI Provider Quotas & Utilization</b>`,
-    ``,
-  ];
+}
 
-  const byProvider: Record<string, typeof params.quotas> = {};
-  for (const q of params.quotas) {
-    byProvider[q.provider] = byProvider[q.provider] || [];
-    byProvider[q.provider].push(q);
+export function buildQuotasMessages(params: TelegramQuotaMessageParams): string[] {
+  const dashboardUrl = params.dashboardUrl || "https://bkserver.tailbbaa91.ts.net/observatory/";
+  const escapedDashboardUrl = escapeHtml(dashboardUrl);
+  const footer = dashboardUrl.length <= 512 && escapedDashboardUrl.length <= 1_024
+    ? `\n👉 <a href="${escapedDashboardUrl}">Open Fleet Observatory</a>`
+    : "";
+  const pageHeader = "🤖 <b>AI Provider Quotas</b>\n\n";
+  const continuedHeader = "🤖 <b>AI Provider Quotas · continued</b>\n\n";
+  const maxPageLength = 4_096;
+  const byProvider = new Map<string, typeof params.quotas>();
+  for (const quota of params.quotas) {
+    const grouped = byProvider.get(quota.provider) || [];
+    grouped.push(quota);
+    byProvider.set(quota.provider, grouped);
   }
 
-  for (const [provider, items] of Object.entries(byProvider)) {
-    const provName = provider === "openai-codex" ? "OpenAI Codex / ChatGPT" : provider === "google-antigravity" ? "Google Antigravity" : provider;
-    lines.push(`<b>${escapeHtml(provName)}:</b>`);
-    for (const item of items) {
-      const bar = formatProgressBar(item.usedPct, 10);
-      const resets = item.resetsAt ? `resets in ${formatCountdown(item.resetsAt)}` : "rolling";
-      const statusEmoji = item.status === "ok" ? "🟢" : item.status === "warning" ? "🟡" : "🔴";
-      const label = item.identityLabel ? `${item.identityLabel} · ` : "";
-      lines.push(`${statusEmoji} ${escapeHtml(label)}${escapeHtml(item.windowName)}: <code>[${bar}]</code> <b>${Math.round(item.usedPct)}%</b> (${resets})`);
+  const pages: string[] = [];
+  let page = pageHeader;
+  const flush = () => {
+    const finished = `${page.trimEnd()}${footer}`;
+    if (finished.length > maxPageLength) throw new Error("Telegram quota page exceeded the hard size limit.");
+    pages.push(finished);
+    page = continuedHeader;
+  };
+  const append = (block: string, repeatedHeading?: string) => {
+    const separator = page.endsWith("\n\n") ? "" : "\n\n";
+    if (page.length + separator.length + block.length + footer.length > maxPageLength) {
+      flush();
+      if (repeatedHeading) page += `${repeatedHeading}\n`;
+    } else {
+      page += separator;
     }
-    lines.push(``);
-  }
+    page += block;
+  };
 
-  lines.push(`👉 <a href="${escapeHtml(dashUrl)}">Open Fleet Observatory</a>`);
-  return lines.join("\n");
+  for (const [provider, items] of byProvider) {
+    const providerName = provider === "openai-codex"
+      ? "OpenAI Codex / ChatGPT"
+      : provider === "google-antigravity"
+        ? "Google Antigravity"
+        : String(provider).slice(0, 64);
+    const byIdentity = new Map<string, typeof items>();
+    for (const item of items) {
+      const identityLabel = String(item.identityLabel || "Shared quota").slice(0, 96);
+      const grouped = byIdentity.get(identityLabel) || [];
+      grouped.push(item);
+      byIdentity.set(identityLabel, grouped);
+    }
+    for (const [identityLabel, identityItems] of byIdentity) {
+      const heading = `<b>${escapeTelegramText(providerName, 96)} · ${escapeTelegramText(identityLabel, 160)}</b>`;
+      append(heading);
+      for (const item of identityItems) {
+        const resets = item.resetsAt ? `reset ${formatCountdown(item.resetsAt)}` : "rolling";
+        const statusEmoji = item.status === "ok" ? "🟢" : item.status === "warning" ? "🟡" : "🔴";
+        const windowName = escapeTelegramText(item.windowName, 240);
+        const entry = `${statusEmoji} ${windowName}\n<code>${formatProgressBar(item.usedPct, 8)}</code> <b>${Math.round(item.usedPct)}%</b> · ${resets}`;
+        append(entry, heading);
+      }
+    }
+  }
+  const finalPage = `${page.trimEnd()}${footer}`;
+  if (finalPage.length > maxPageLength) throw new Error("Telegram quota page exceeded the hard size limit.");
+  pages.push(finalPage);
+  return pages;
 }
 
 export function buildBalancesMessage(params: {
@@ -1095,10 +1140,13 @@ export class TelegramNotifier {
                   }
                 }
 
-                await this.transport.sendMessage(buildQuotasMessage({
+                const messages = buildQuotasMessages({
                   quotas: quotasData,
                   dashboardUrl: this.config.telegram.dashboardUrl,
-                }));
+                });
+                for (const messagePage of messages) {
+                  await this.transport.sendMessage(messagePage);
+                }
               } else if (command === "/status" || command === "/overview") {
                 const accountsData: Array<{
                   label: string;
@@ -1111,7 +1159,6 @@ export class TelegramNotifier {
                 let identitiesCount = 0;
                 let totalWindows = 0;
                 let warningCount = 0;
-                let hostsOnline = 1;
                 const openAiWindows: Array<{ name: string; usedPct: number; resetsIn: string }> = [];
 
                 if (context.observatoryStore) {
@@ -1138,7 +1185,6 @@ export class TelegramNotifier {
                   totalWindows = windows.length;
                   warningCount = windows.filter((w) => ["warning", "critical", "exhausted"].includes(String(w.status))).length;
                   identitiesCount = context.observatoryStore.listIdentities().length;
-                  hostsOnline = context.observatoryStore.listHosts().filter((h) => h.status === "online").length;
 
                   for (const w of windows) {
                     if (w.provider === "openai-codex") {
@@ -1164,7 +1210,6 @@ export class TelegramNotifier {
                     identitiesCount,
                   },
                   openAiWindows,
-                  hostsOnline,
                   dashboardUrl: this.config.telegram.dashboardUrl,
                 }));
               } else if (command.startsWith("/")) {
@@ -1172,8 +1217,8 @@ export class TelegramNotifier {
                   `❓ Unknown command <code>${escapeHtml(command)}</code>.\n\nAvailable commands:\n/status — Fleet overview\n/quotas — Provider quotas\n/balance — AgentRouter balances\n/dashboard — Dashboard link\n/help — Command list`
                 );
               }
-            } catch (cmdError) {
-              console.error(`Telegram command ${command} handler failed:`, cmdError);
+            } catch {
+              console.error(`Telegram command ${command} handler failed.`);
             }
           }
         } catch (pollError) {

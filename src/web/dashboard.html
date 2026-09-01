@@ -12,7 +12,6 @@
   </head>
   <body>
     <a class="skip-link" href="#main-content">Skip to observatory content</a>
-    <canvas id="celebration-canvas" class="celebration-canvas" aria-hidden="true"></canvas>
     <div class="ambient ambient-one" aria-hidden="true"></div>
     <div class="ambient ambient-two" aria-hidden="true"></div>
     <div class="noise" aria-hidden="true"></div>
@@ -31,7 +30,6 @@
         <span id="next-run-label" class="next-run">Calculating next cycle…</span>
       </div>
       <div class="topbar-actions">
-        <button id="preview-celebration-btn" class="button ghost" type="button" title="Preview quota reset celebration" aria-label="Preview quota reset celebration"><span aria-hidden="true">✦</span> <span class="action-label">Celebrate</span></button>
         <button id="stop-all" class="button danger-button hidden" type="button" aria-label="Stop collection cycle"><span aria-hidden="true">■</span> <span class="action-label">Stop</span></button>
         <button id="run-all" class="button primary" type="button" aria-label="Run all checks"><span aria-hidden="true">▶</span> <span class="action-label">Run all</span></button>
         <button id="open-settings" class="button icon-only" type="button" aria-label="Schedule and observatory settings"><svg class="ui-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M12 15.2a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4Z"/><path d="m19.4 13.5 1.1.9-2 3.4-1.4-.55a7.6 7.6 0 0 1-1.6.9l-.2 1.48h-4l-.2-1.48a7.6 7.6 0 0 1-1.6-.9l-1.4.55-2-3.4 1.1-.9a8.2 8.2 0 0 1 0-1.9l-1.1-.9 2-3.4 1.4.55a7.6 7.6 0 0 1 1.6-.9l.2-1.48h4l.2 1.48a7.6 7.6 0 0 1 1.6.9l1.4-.55 2 3.4-1.1.9a8.2 8.2 0 0 1 0 1.9Z"/></svg></button>
@@ -92,23 +90,13 @@
           </button>
           <button id="nav-credentials" class="nav-card" type="button" data-view="credentials" aria-label="Provider Credentials view">
             <span class="nav-icon">ID</span>
-            <span><strong>Credentials</strong><small>Identities & health</small></span>
+            <span><strong>Quota Accounts</strong><small>OpenAI & Antigravity</small></span>
             <b id="credentials-health" class="health-dot neutral" aria-hidden="true"></b>
           </button>
           <button id="nav-accounts" class="nav-card" type="button" data-view="accounts" aria-label="AgentRouter Accounts view">
             <span class="nav-icon">AR</span>
             <span><strong>AgentRouter</strong><small>Accounts & balances</small></span>
             <b id="accounts-health" class="health-dot neutral" aria-hidden="true"></b>
-          </button>
-          <button id="nav-sessions" class="nav-card" type="button" data-view="sessions" aria-label="OMP Sessions view">
-            <span class="nav-icon">S</span>
-            <span><strong>OMP Sessions</strong><small>Execution telemetry</small></span>
-            <b id="sessions-health" class="health-dot neutral" aria-hidden="true"></b>
-          </button>
-          <button id="nav-hosts" class="nav-card" type="button" data-view="hosts" aria-label="Fleet Hosts view">
-            <span class="nav-icon">H</span>
-            <span><strong>Fleet Hosts</strong><small>Connected agents</small></span>
-            <b id="hosts-health" class="health-dot neutral" aria-hidden="true"></b>
           </button>
           <button id="nav-notifications" class="nav-card" type="button" data-view="notifications" aria-label="Notifications view">
             <span class="nav-icon">N</span>
@@ -152,7 +140,7 @@
             <div class="hero-copy">
               <p class="eyebrow">AI FLEET OBSERVATORY</p>
               <h1>Fleet Intelligence.<br><span>One living signal.</span></h1>
-              <p>Unified telemetry across AI provider quotas, host agents, active sessions, notification routing, and AgentRouter portfolio balances.</p>
+              <p>Live quotas for every broker identity, complete AgentRouter account history, automation health, and customizable notifications.</p>
               <div class="hero-actions">
                 <button id="hero-run" class="button primary large" type="button">Run collection cycle <span>↗</span></button>
                 <button id="hero-settings" class="button ghost large" type="button">Tune schedule</button>
@@ -168,6 +156,17 @@
 
           <section id="observatory-summary-metrics" class="metric-grid"></section>
           <section id="overview-metrics" class="metric-grid overview-metrics"></section>
+          <section class="panel glass provider-overview-panel">
+            <header class="panel-heading">
+              <div>
+                <p class="eyebrow">LIVE BROKER QUOTAS</p>
+                <h2>OpenAI & Antigravity accounts</h2>
+                <p>One card per broker identity, refreshed every minute without browser automation.</p>
+              </div>
+              <button id="overview-open-quotas" class="button ghost" type="button">View all quota windows →</button>
+            </header>
+            <div id="overview-provider-accounts" class="provider-account-grid"></div>
+          </section>
 
           <section class="dashboard-grid">
             <article class="panel glass chart-panel span-8">
@@ -418,93 +417,6 @@
           </section>
         </div>
 
-        <!-- VIEW 5: OMP SESSIONS -->
-        <div id="sessions-view" class="view-panel hidden">
-          <section class="view-header glass">
-            <div>
-              <p class="eyebrow">EXECUTION TELEMETRY</p>
-              <h1>OMP Sessions</h1>
-              <p class="muted">Live agent sessions, token volume, execution latencies, and tool invocation tracking.</p>
-            </div>
-            <div class="view-actions">
-              <button id="refresh-sessions-btn" class="button ghost" type="button">↻ Refresh sessions</button>
-            </div>
-          </section>
-
-          <section id="sessions-summary-metrics" class="metric-grid"></section>
-
-          <section class="panel glass">
-            <header class="panel-heading">
-              <div>
-                <p class="eyebrow">SESSION LOG</p>
-                <h2>Recent Agent Sessions</h2>
-              </div>
-              <div class="filter-group">
-                <select id="session-status-filter" aria-label="Filter by session status">
-                  <option value="all">All statuses</option>
-                  <option value="active">Active</option>
-                  <option value="completed">Completed</option>
-                  <option value="failed">Failed</option>
-                  <option value="cancelled">Cancelled</option>
-                </select>
-              </div>
-            </header>
-            <div class="table-scroll">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Session</th>
-                    <th>Host</th>
-                    <th>Identity</th>
-                    <th>Status</th>
-                    <th>Started</th>
-                    <th>Duration</th>
-                    <th>Tokens</th>
-                    <th>Tools</th>
-                    <th>Errors</th>
-                    <th>Cost</th>
-                    <th>Metadata</th>
-                  </tr>
-                </thead>
-                <tbody id="sessions-body"></tbody>
-              </table>
-            </div>
-          </section>
-        </div>
-
-        <!-- VIEW 6: FLEET HOSTS -->
-        <div id="hosts-view" class="view-panel hidden">
-          <section class="view-header glass">
-            <div>
-              <p class="eyebrow">INFRASTRUCTURE</p>
-              <h1>Fleet Hosts</h1>
-              <p class="muted">Distributed host runners, agent versions, active worker pools, and heartbeat telemetry.</p>
-            </div>
-            <div class="view-actions">
-              <button id="refresh-hosts-btn" class="button ghost" type="button">↻ Refresh hosts</button>
-            </div>
-          </section>
-
-          <section id="hosts-summary-metrics" class="metric-grid"></section>
-
-          <section class="panel glass">
-            <header class="panel-heading">
-              <div>
-                <p class="eyebrow">HOST ROSTER</p>
-                <h2>Connected Fleet Hosts</h2>
-              </div>
-              <div class="filter-group">
-                <select id="host-status-filter" aria-label="Filter by host status">
-                  <option value="all">All host statuses</option>
-                  <option value="online">Online</option>
-                  <option value="degraded">Degraded</option>
-                  <option value="offline">Offline</option>
-                </select>
-              </div>
-            </header>
-            <div id="hosts-container" class="hosts-grid"></div>
-          </section>
-        </div>
 
         <!-- VIEW 7: NOTIFICATIONS & POLICIES -->
         <div id="notifications-view" class="view-panel hidden">
@@ -525,7 +437,7 @@
                 <div>
                   <p class="eyebrow">POLICY ENGINE</p>
                   <h2>Configured Policy Hierarchy</h2>
-                  <p>Precedence: Global → Provider → Credential → Identity → Account → Host → Session</p>
+                  <p>Precedence: Global → Event → Provider → Credential → Identity → Account</p>
                 </div>
               </header>
               <div id="policies-list" class="policies-list"></div>
@@ -760,7 +672,7 @@
         <div class="dialog-heading">
           <div>
             <p class="eyebrow">AUTOMATION & OBSERVATORY</p>
-            <h2 id="settings-dialog-title">Schedule & celebration</h2>
+            <h2 id="settings-dialog-title">Automation schedule</h2>
           </div>
           <button id="close-settings" class="icon-button" type="button" aria-label="Close settings">×</button>
         </div>
@@ -782,38 +694,6 @@
           </label>
         </div>
 
-        <div class="settings-section">
-          <p class="eyebrow">CONFIRMED-RESET CELEBRATION</p>
-          <div class="field-grid">
-            <label>Celebration Animation
-              <select id="celebration-effect" aria-label="Celebration effect">
-                <option value="fireworks" selected>Fireworks (Aerial bursts)</option>
-                <option value="confetti">Confetti (Flutter ribbons)</option>
-                <option value="aurora">Aurora (Luminous waves)</option>
-                <option value="spark">Spark (Radial sparkles)</option>
-                <option value="random">Random Effect</option>
-                <option value="off">Off (Disabled)</option>
-              </select>
-            </label>
-            <label>Duration
-              <select id="celebration-duration" aria-label="Celebration duration">
-                <option value="short" selected>Short (2s)</option>
-                <option value="medium">Medium (4s)</option>
-                <option value="long">Long (6s)</option>
-              </select>
-            </label>
-            <label>Intensity
-              <select id="celebration-intensity" aria-label="Celebration intensity">
-                <option value="low" selected>Low (Gentle, default)</option>
-                <option value="medium">Medium</option>
-                <option value="high">High</option>
-              </select>
-            </label>
-            <div class="celebration-preview-cell">
-              <button id="test-celebration" class="button secondary" type="button">✦ Preview effect</button>
-            </div>
-          </div>
-        </div>
 
         <div class="switch-grid">
           <label class="switch-row"><input id="scheduler-enabled" type="checkbox"><span class="switch"></span><span>Scheduled cycles</span></label>
@@ -823,8 +703,8 @@
           <label class="switch-row"><input id="capture-screenshots" type="checkbox"><span class="switch"></span><span>Capture screenshots</span></label>
         </div>
         <div class="info-callout">
-          <strong>Two independent schedules & celebration rules</strong>
-          <p>Server browser cycles handle GitHub OAuth, automatic token capture, and verified logout. Read-only polling refreshes balances without Chromium. Celebrations animate strictly for durable reset SSE events and respect reduced-motion.</p>
+          <strong>Independent login and read-only polling schedules</strong>
+          <p>Browser cycles refresh GitHub and AgentRouter sessions, capture API access, and verify logout. Read-only polling refreshes balances between browser cycles.</p>
         </div>
         <p id="settings-error" class="form-error" role="alert"></p>
         <div class="dialog-actions">
@@ -855,8 +735,6 @@
               <option value="pool">Pool Override</option>
               <option value="identity">Identity Override</option>
               <option value="account">Account Override</option>
-              <option value="host">Host Override</option>
-              <option value="session">Session Override</option>
             </select>
           </label>
           <label>Scope Key
