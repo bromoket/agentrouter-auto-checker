@@ -5,7 +5,10 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildChartWorkerEnv } from "./child-environment";
 import type { AppConfig, TelegramConfig } from "./config";
+import type { AccountStore } from "./accounts";
 import type { OmpQuotaObservation, OmpQuotaTransitionEvent } from "./omp-quota";
+import type { ObservatoryCoordinator } from "./observatory/coordinator";
+import type { ObservatoryStore } from "./observatory/store";
 import type {
   CreditGrantEvent,
   CreditObservation,
@@ -85,6 +88,229 @@ export function observedAt(value: string): string {
 export function compactError(value: string | undefined): string {
   if (!value) return "Unknown account-check failure";
   return value.replace(/\u001B\[[0-9;]*m/g, "").replace(/\s+/g, " ").slice(0, 500);
+}
+export function formatProgressBar(usedPct: number, length = 10): string {
+  const clamped = Math.max(0, Math.min(100, Number.isFinite(usedPct) ? usedPct : 0));
+  const filled = Math.round((clamped / 100) * length);
+  const empty = length - filled;
+  return "█".repeat(filled) + "░".repeat(empty);
+}
+
+export function formatCountdown(isoTime: string | null | undefined): string {
+  if (!isoTime) return "unknown";
+  const target = Date.parse(isoTime);
+  if (!Number.isFinite(target)) return "unknown";
+  const diffMs = target - Date.now();
+  if (diffMs <= 0) return "now";
+  const totalMinutes = Math.floor(diffMs / 60_000);
+  const hours = Math.floor(totalMinutes / 60);
+  const mins = totalMinutes % 60;
+  const days = Math.floor(hours / 24);
+  if (days > 0) {
+    const remHours = hours % 24;
+    return `${days}d ${remHours}h`;
+  }
+  if (hours > 0) {
+    return `${hours}h ${mins}m`;
+  }
+  return `${mins}m`;
+}
+
+export interface TelegramUser {
+  id: number;
+  is_bot?: boolean;
+  first_name?: string;
+  last_name?: string;
+  username?: string;
+}
+
+export interface TelegramChat {
+  id: number | string;
+  type: string;
+  username?: string;
+  first_name?: string;
+  last_name?: string;
+}
+
+export interface TelegramMessage {
+  message_id: number;
+  from?: TelegramUser;
+  chat: TelegramChat;
+  date: number;
+  text?: string;
+}
+
+export interface TelegramUpdate {
+  update_id: number;
+  message?: TelegramMessage;
+}
+
+export function buildHelpMessage(allowedUsername: string, dashboardUrl?: string): string {
+  const dashUrl = dashboardUrl || "https://bkserver.tailbbaa91.ts.net/observatory/";
+  return [
+    `🛸 <b>AI Fleet Observatory Bot</b>`,
+    ``,
+    `Welcome, <b>@${escapeHtml(allowedUsername)}</b>! Live controls:`,
+    ``,
+    `📊 /status — Full fleet overview & account health`,
+    `🤖 /quotas — Live OMP quotas (OpenAI & Antigravity)`,
+    `💰 /balance — AgentRouter balances & daily $25 grants`,
+    `🌐 /dashboard — Direct web dashboard link`,
+    `🏓 /ping — Check connectivity & response time`,
+    ``,
+    `👉 <a href="${escapeHtml(dashUrl)}">Open Fleet Observatory</a>`,
+    ``,
+    `<i>⚡ Real-time updates polling every 1 minute on Xeon.</i>`,
+  ].join("\n");
+}
+
+export function buildStatusMessage(params: {
+  agentrouterAccounts: Array<{
+    label: string;
+    balance: number | null;
+    consumed: number | null;
+    requestCount: number | null;
+    status: string;
+  }>;
+  totalBalance: number;
+  totalConsumed: number;
+  quotasSummary: {
+    totalWindows: number;
+    warningCount: number;
+    identitiesCount: number;
+  };
+  openAiWindows?: Array<{
+    name: string;
+    usedPct: number;
+    resetsIn: string;
+  }>;
+  hostsOnline: number;
+  dashboardUrl?: string;
+}): string {
+  const dashUrl = params.dashboardUrl || "https://bkserver.tailbbaa91.ts.net/observatory/";
+  const healthEmoji = params.quotasSummary.warningCount === 0 ? "🟢" : "🟡";
+  const lines: string[] = [
+    `📊 <b>AI Fleet Status</b> • ${healthEmoji} <b>Operational</b>`,
+    ``,
+    `💼 <b>AgentRouter Portfolio:</b>`,
+  ];
+
+  for (const acc of params.agentrouterAccounts) {
+    const bal = acc.balance !== null ? `$${acc.balance.toFixed(2)}` : "—";
+    const usage = acc.consumed !== null ? `$${acc.consumed.toFixed(2)}` : "—";
+    const reqs = acc.requestCount !== null ? acc.requestCount.toLocaleString() : "—";
+    const dot = acc.status === "ok" ? "🟢" : "🔴";
+    lines.push(`• ${dot} <b>${escapeHtml(acc.label)}</b>: <b>${bal}</b> | Usage: ${usage} (${reqs} reqs)`);
+  }
+  lines.push(`💰 <b>Total Balance:</b> <b>$${params.totalBalance.toFixed(2)}</b> (Usage: $${params.totalConsumed.toFixed(2)})`);
+  lines.push(``);
+
+  lines.push(`🤖 <b>AI Provider Quotas:</b>`);
+  lines.push(`• <b>Identities:</b> ${params.quotasSummary.identitiesCount} active (${params.quotasSummary.totalWindows} monitored windows)`);
+  if (params.openAiWindows && params.openAiWindows.length > 0) {
+    for (const w of params.openAiWindows) {
+      lines.push(`  └ <b>${escapeHtml(w.name)}:</b> <code>[${formatProgressBar(w.usedPct, 8)}]</code> ${Math.round(w.usedPct)}% (${w.resetsIn})`);
+    }
+  }
+  lines.push(`• <b>Warnings / High Usage:</b> ${params.quotasSummary.warningCount === 0 ? "None (All nominal)" : `${params.quotasSummary.warningCount} active`}`);
+  lines.push(``);
+  lines.push(`🖥 <b>Fleet Hosts:</b> ${params.hostsOnline} online`);
+  lines.push(``);
+  lines.push(`👉 <a href="${escapeHtml(dashUrl)}">Open Fleet Observatory</a>`);
+  return lines.join("\n");
+}
+
+export function buildQuotasMessage(params: {
+  quotas: Array<{
+    provider: string;
+    identityLabel: string;
+    windowName: string;
+    usedPct: number;
+    resetsAt?: string;
+    status: string;
+  }>;
+  dashboardUrl?: string;
+}): string {
+  const dashUrl = params.dashboardUrl || "https://bkserver.tailbbaa91.ts.net/observatory/";
+  const lines: string[] = [
+    `🤖 <b>AI Provider Quotas & Utilization</b>`,
+    ``,
+  ];
+
+  const byProvider: Record<string, typeof params.quotas> = {};
+  for (const q of params.quotas) {
+    byProvider[q.provider] = byProvider[q.provider] || [];
+    byProvider[q.provider].push(q);
+  }
+
+  for (const [provider, items] of Object.entries(byProvider)) {
+    const provName = provider === "openai-codex" ? "OpenAI Codex / ChatGPT" : provider === "google-antigravity" ? "Google Antigravity" : provider;
+    lines.push(`<b>${escapeHtml(provName)}:</b>`);
+    for (const item of items) {
+      const bar = formatProgressBar(item.usedPct, 10);
+      const resets = item.resetsAt ? `resets in ${formatCountdown(item.resetsAt)}` : "rolling";
+      const statusEmoji = item.status === "ok" ? "🟢" : item.status === "warning" ? "🟡" : "🔴";
+      const label = item.identityLabel ? `${item.identityLabel} · ` : "";
+      lines.push(`${statusEmoji} ${escapeHtml(label)}${escapeHtml(item.windowName)}: <code>[${bar}]</code> <b>${Math.round(item.usedPct)}%</b> (${resets})`);
+    }
+    lines.push(``);
+  }
+
+  lines.push(`👉 <a href="${escapeHtml(dashUrl)}">Open Fleet Observatory</a>`);
+  return lines.join("\n");
+}
+
+export function buildBalancesMessage(params: {
+  accounts: Array<{
+    label: string;
+    balance: number | null;
+    consumed: number | null;
+    requestCount: number | null;
+    status: string;
+    lastObservedAt: string;
+    dailyGrantConfirmed?: boolean;
+  }>;
+  totalBalance: number;
+  totalConsumed: number;
+  dashboardUrl?: string;
+}): string {
+  const dashUrl = params.dashboardUrl || "https://bkserver.tailbbaa91.ts.net/observatory/";
+  const lines: string[] = [
+    `💰 <b>AgentRouter Portfolio Balances</b>`,
+    ``,
+  ];
+
+  params.accounts.forEach((acc, idx) => {
+    const bal = acc.balance !== null ? `$${acc.balance.toFixed(2)}` : "—";
+    const usage = acc.consumed !== null ? `$${acc.consumed.toFixed(2)}` : "—";
+    const reqs = acc.requestCount !== null ? acc.requestCount.toLocaleString() : "—";
+    const dot = acc.status === "ok" ? "🟢" : "🔴";
+    const grantStatus = acc.dailyGrantConfirmed ? "✅ Confirmed ($25.00 daily grant)" : "⏳ Pending daily grant";
+    lines.push(`<b>${idx + 1}. ${escapeHtml(acc.label)}</b> ${dot}`);
+    lines.push(`• Live Balance: <b>${bal}</b>`);
+    lines.push(`• Consumed / Usage: <b>${usage}</b>`);
+    lines.push(`• Total Requests: <b>${reqs}</b>`);
+    lines.push(`• Daily Grant: ${grantStatus}`);
+    lines.push(`• Last Polled: ${observedAt(acc.lastObservedAt)}`);
+    lines.push(``);
+  });
+
+  lines.push(`💵 <b>Combined Fleet Balance:</b> <b>$${params.totalBalance.toFixed(2)}</b>`);
+  lines.push(`📈 <b>Total Fleet Usage:</b> $${params.totalConsumed.toFixed(2)}`);
+  lines.push(``);
+  lines.push(`👉 <a href="${escapeHtml(dashUrl)}">Open Fleet Observatory</a>`);
+  return lines.join("\n");
+}
+
+export function buildDashboardMessage(dashboardUrl?: string): string {
+  const dashUrl = dashboardUrl || "https://bkserver.tailbbaa91.ts.net/observatory/";
+  return [
+    `🌐 <b>AI Fleet Observatory Dashboard</b>`,
+    ``,
+    `👉 <a href="${escapeHtml(dashUrl)}">${escapeHtml(dashUrl)}</a>`,
+    ``,
+    `<i>Private tailnet access with persistent 7-day session.</i>`,
+  ].join("\n");
 }
 
 class TelegramStateStore {
@@ -196,6 +422,37 @@ class TelegramTransport {
     form.set("parse_mode", "HTML");
     form.set("photo", new Blob([photoBuffer], { type: "image/png" }), "agentrouter-balance.png");
     await this.request("sendPhoto", form);
+  }
+  async getUpdates(offset: number, timeoutSeconds = 25): Promise<TelegramUpdate[]> {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), (timeoutSeconds + 10) * 1_000);
+    try {
+      const response = await this.fetcher(
+        `https://api.telegram.org/bot${this.config.botToken}/getUpdates`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            offset,
+            timeout: timeoutSeconds,
+            allowed_updates: ["message"],
+          }),
+          signal: controller.signal,
+        },
+      );
+      const result = (await response.json().catch(() => ({}))) as {
+        ok?: boolean;
+        result?: TelegramUpdate[];
+      };
+      if (response.ok && result.ok && Array.isArray(result.result)) {
+        return result.result;
+      }
+      return [];
+    } catch {
+      return [];
+    } finally {
+      clearTimeout(timeout);
+    }
   }
 
   private async request(
@@ -724,5 +981,213 @@ export class TelegramNotifier {
         await this.sendOmpQuotaRecovery(event.observation);
         break;
     }
+  }
+  startCommandListener(context: {
+    store: Store;
+    accounts?: AccountStore;
+    observatoryStore?: ObservatoryStore | null;
+    observatoryCoordinator?: ObservatoryCoordinator | null;
+  }): () => void {
+    let running = true;
+    let lastOffset = 0;
+
+    const listenerLoop = async () => {
+      while (running) {
+        try {
+          const updates = await this.transport.getUpdates(lastOffset, 20);
+          if (!running) break;
+
+          for (const update of updates) {
+            if (update.update_id >= lastOffset) {
+              lastOffset = update.update_id + 1;
+            }
+
+            const message = update.message;
+            if (!message || typeof message.text !== "string") continue;
+
+            const chatId = String(message.chat.id);
+            const username = message.from?.username?.toLowerCase() || "";
+
+            // Verify caller identity strictly
+            if (
+              chatId !== this.config.telegram.chatId ||
+              (this.config.telegram.allowedUsername && username !== this.config.telegram.allowedUsername)
+            ) {
+              continue;
+            }
+
+            const command = message.text.trim().split(/\s+/)[0].toLowerCase().split("@")[0];
+
+            try {
+              if (command === "/start" || command === "/help") {
+                await this.transport.sendMessage(buildHelpMessage(this.config.telegram.allowedUsername || "owner", this.config.telegram.dashboardUrl));
+              } else if (command === "/dashboard" || command === "/link") {
+                await this.transport.sendMessage(buildDashboardMessage(this.config.telegram.dashboardUrl));
+              } else if (command === "/ping") {
+                await this.transport.sendMessage(`🏓 <b>Pong!</b> Fleet Observatory operational.\n⏱ Uptime: ${Math.floor(process.uptime())}s`);
+              } else if (command === "/balance" || command === "/balances" || command === "/accounts") {
+                const accountsData: Array<{
+                  label: string;
+                  balance: number | null;
+                  consumed: number | null;
+                  requestCount: number | null;
+                  status: string;
+                  lastObservedAt: string;
+                  dailyGrantConfirmed?: boolean;
+                }> = [];
+
+                if (context.observatoryStore) {
+                  const obsAccounts = context.observatoryStore.listAgentRouterAccounts();
+                  for (const acc of obsAccounts) {
+                    const endpoints = context.observatoryStore.listAgentRouterEndpointObservations({ accountId: acc.accountId, limit: 1 });
+                    const runs = context.observatoryStore.listAgentRouterRuns({ accountId: acc.accountId, limit: 1 });
+                    const grants = context.observatoryStore.listAgentRouterGrantEvents({ accountId: acc.accountId, limit: 1 });
+                    const latestEndpoint = endpoints[0] ?? null;
+                    const latestRun = runs[0] ?? null;
+                    const balance = latestEndpoint?.balance ?? latestRun?.balance ?? null;
+                    const consumed = latestEndpoint?.consumed ?? latestRun?.consumed ?? null;
+                    const requestCount = latestEndpoint?.requestCount ?? latestRun?.requestCount ?? null;
+                    const status = latestEndpoint?.status ?? latestRun?.status ?? "ok";
+                    const lastObservedAt = latestEndpoint?.observedAt ?? latestRun?.startedAt ?? acc.updatedAt;
+                    const hasGrantToday = grants.length > 0;
+                    accountsData.push({
+                      label: acc.accountLabel,
+                      balance,
+                      consumed,
+                      requestCount,
+                      status,
+                      lastObservedAt,
+                      dailyGrantConfirmed: hasGrantToday,
+                    });
+                  }
+                }
+
+                const totalBalance = accountsData.reduce((s, a) => s + (a.balance || 0), 0);
+                const totalConsumed = accountsData.reduce((s, a) => s + (a.consumed || 0), 0);
+                await this.transport.sendMessage(buildBalancesMessage({
+                  accounts: accountsData,
+                  totalBalance,
+                  totalConsumed,
+                  dashboardUrl: this.config.telegram.dashboardUrl,
+                }));
+              } else if (command === "/quotas") {
+                const quotasData: Array<{
+                  provider: string;
+                  identityLabel: string;
+                  windowName: string;
+                  usedPct: number;
+                  resetsAt?: string;
+                  status: string;
+                }> = [];
+
+                if (context.observatoryStore) {
+                  const windows = context.observatoryStore.listCurrentQuotaWindows();
+                  for (const w of windows) {
+                    const identity = context.observatoryStore.getIdentity(w.identityId);
+                    quotasData.push({
+                      provider: w.provider,
+                      identityLabel: identity?.label || "",
+                      windowName: `${w.bucketId} (${w.windowId})`,
+                      usedPct: w.remainingFraction !== null ? (1 - w.remainingFraction) * 100 : 0,
+                      resetsAt: w.resetsAt ?? undefined,
+                      status: w.status,
+                    });
+                  }
+                }
+
+                await this.transport.sendMessage(buildQuotasMessage({
+                  quotas: quotasData,
+                  dashboardUrl: this.config.telegram.dashboardUrl,
+                }));
+              } else if (command === "/status" || command === "/overview") {
+                const accountsData: Array<{
+                  label: string;
+                  balance: number | null;
+                  consumed: number | null;
+                  requestCount: number | null;
+                  status: string;
+                }> = [];
+
+                let identitiesCount = 0;
+                let totalWindows = 0;
+                let warningCount = 0;
+                let hostsOnline = 1;
+                const openAiWindows: Array<{ name: string; usedPct: number; resetsIn: string }> = [];
+
+                if (context.observatoryStore) {
+                  const obsAccounts = context.observatoryStore.listAgentRouterAccounts();
+                  for (const acc of obsAccounts) {
+                    const endpoints = context.observatoryStore.listAgentRouterEndpointObservations({ accountId: acc.accountId, limit: 1 });
+                    const runs = context.observatoryStore.listAgentRouterRuns({ accountId: acc.accountId, limit: 1 });
+                    const latestEndpoint = endpoints[0] ?? null;
+                    const latestRun = runs[0] ?? null;
+                    const balance = latestEndpoint?.balance ?? latestRun?.balance ?? null;
+                    const consumed = latestEndpoint?.consumed ?? latestRun?.consumed ?? null;
+                    const requestCount = latestEndpoint?.requestCount ?? latestRun?.requestCount ?? null;
+                    const status = latestEndpoint?.status ?? latestRun?.status ?? "ok";
+                    accountsData.push({
+                      label: acc.accountLabel,
+                      balance,
+                      consumed,
+                      requestCount,
+                      status,
+                    });
+                  }
+
+                  const windows = context.observatoryStore.listCurrentQuotaWindows();
+                  totalWindows = windows.length;
+                  warningCount = windows.filter((w) => ["warning", "critical", "exhausted"].includes(String(w.status))).length;
+                  identitiesCount = context.observatoryStore.listIdentities().length;
+                  hostsOnline = context.observatoryStore.listHosts().filter((h) => h.status === "online").length;
+
+                  for (const w of windows) {
+                    if (w.provider === "openai-codex") {
+                      openAiWindows.push({
+                        name: `${w.bucketId} (${w.windowId})`,
+                        usedPct: w.remainingFraction !== null ? (1 - w.remainingFraction) * 100 : 0,
+                        resetsIn: w.resetsAt ? `resets in ${formatCountdown(w.resetsAt)}` : "rolling",
+                      });
+                    }
+                  }
+                }
+
+                const totalBalance = accountsData.reduce((s, a) => s + (a.balance || 0), 0);
+                const totalConsumed = accountsData.reduce((s, a) => s + (a.consumed || 0), 0);
+
+                await this.transport.sendMessage(buildStatusMessage({
+                  agentrouterAccounts: accountsData,
+                  totalBalance,
+                  totalConsumed,
+                  quotasSummary: {
+                    totalWindows,
+                    warningCount,
+                    identitiesCount,
+                  },
+                  openAiWindows,
+                  hostsOnline,
+                  dashboardUrl: this.config.telegram.dashboardUrl,
+                }));
+              } else if (command.startsWith("/")) {
+                await this.transport.sendMessage(
+                  `❓ Unknown command <code>${escapeHtml(command)}</code>.\n\nAvailable commands:\n/status — Fleet overview\n/quotas — Provider quotas\n/balance — AgentRouter balances\n/dashboard — Dashboard link\n/help — Command list`
+                );
+              }
+            } catch (cmdError) {
+              console.error(`Telegram command ${command} handler failed:`, cmdError);
+            }
+          }
+        } catch (pollError) {
+          if (!running) break;
+          await Bun.sleep(5_000);
+        }
+        await Bun.sleep(1_000);
+      }
+    };
+
+    void listenerLoop();
+
+    return () => {
+      running = false;
+    };
   }
 }

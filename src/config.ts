@@ -348,7 +348,7 @@ function loadObservatoryConfig(
     (typeof process.env.HOSTNAME === "string" && process.env.HOSTNAME.trim()
       ? process.env.HOSTNAME.trim()
       : hostname() || "local-host");
-  const pollIntervalMinutes = parseBoundedInteger("OBSERVATORY_POLL_INTERVAL_MINUTES", 5, 1, 1440);
+  const pollIntervalMinutes = parseBoundedInteger("OBSERVATORY_POLL_INTERVAL_MINUTES", 1, 1, 1440);
   const retentionDays = parseBoundedInteger("OBSERVATORY_RETENTION_DAYS", 14, 1, 3650);
   const retentionPruneIntervalMinutes = parseBoundedInteger(
     "OBSERVATORY_RETENTION_PRUNE_INTERVAL_MINUTES",

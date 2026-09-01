@@ -266,6 +266,7 @@ describe("Dashboard authentication and route security", () => {
         "/api/runs",
         "/api/coordinator",
         "/api/observatory/overview",
+        "/api/observatory/live",
         "/api/observatory/quotas",
         "/api/observatory/identities",
         "/api/observatory/hosts",
@@ -527,6 +528,7 @@ describe("Observatory disabled default isolation", () => {
     try {
       const obsPaths = [
         "/api/observatory/overview",
+        "/api/observatory/live",
         "/api/observatory/quotas",
         "/api/observatory/identities",
         "/api/observatory/hosts",
@@ -570,6 +572,15 @@ describe("Observatory enabled endpoints and SSE replay", () => {
       };
       expect(overview.totals.identities).toBeGreaterThanOrEqual(1);
       expect(overview.identities.length).toBeGreaterThanOrEqual(1);
+      // 1b. Live
+      const liveRes = await fetch(`${fixture.baseUrl}/api/observatory/live`, { headers: { cookie: cookie! } });
+      expect(liveRes.status).toBe(200);
+      const liveData = (await liveRes.json()) as {
+        totals: { identitiesCount: number };
+        agentrouter: unknown[];
+      };
+      expect(liveData.totals.identitiesCount).toBeGreaterThanOrEqual(1);
+      expect(Array.isArray(liveData.agentrouter)).toBe(true);
 
       // 2. Quotas
       const quotasRes = await fetch(`${fixture.baseUrl}/api/observatory/quotas`, { headers: { cookie: cookie! } });

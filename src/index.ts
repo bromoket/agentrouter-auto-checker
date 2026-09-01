@@ -168,6 +168,15 @@ async function main(): Promise<void> {
     ? await startCollectorListener(config, observatoryStore)
     : null;
   if (collectorServer) console.log("collector: listening on registered loopback ingestion port");
+  const stopTelegramCommands = telegram?.startCommandListener({
+    store,
+    accounts,
+    observatoryStore,
+    observatoryCoordinator,
+  });
+  if (telegram) {
+    console.log("telegram: interactive command listener active (/status, /quotas, /balance, /dashboard)");
+  }
   const server = startDashboard(store, accounts, settings, challenges, coordinator, config, observatoryContext);
   console.log(`dashboard: ${server.url}`);
   const automation = await settings.load();
@@ -184,6 +193,7 @@ async function main(): Promise<void> {
     if (closing) return;
     closing = true;
     coordinator.stopScheduler();
+    stopTelegramCommands?.();
     collectorServer?.close();
     server.stop(true);
     await retention.close();

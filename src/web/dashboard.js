@@ -617,15 +617,15 @@ function renderOverviewMetrics() {
   metrics.replaceChildren();
   const totals = state.overview?.totals || {};
   metrics.append(
-    metricCard("Combined balance", formatMoney(totals.balance), `${totals.configuredAccounts || 0} configured accounts`, PALETTE[0]),
-    metricCard("Confirmed grants", formatMoney(totals.confirmedEarnings), "Direct AgentRouter system evidence", PALETTE[1], "gain"),
-    metricCard("Observed increases", formatMoney(totals.observedEarnings), "Balance deltas; correlation only", PALETTE[2], "gain"),
-    metricCard("Lifetime spend", formatMoney(totals.consumed), "Across latest snapshots", PALETTE[3]),
-    metricCard("Total requests", formatCompact(totals.requests), "Account lifetime count", PALETTE[4]),
+    metricCard("Combined balance", formatMoney(totals.balance), `${totals.configuredAccounts || 0} active accounts`, PALETTE[0]),
+    metricCard("Daily $25 Grants", formatMoney(totals.confirmedEarnings), "Automated daily login rewards", PALETTE[1], "gain"),
+    metricCard("Observed increases", formatMoney(totals.observedEarnings), "Confirmed credit awards", PALETTE[2], "gain"),
+    metricCard("Total Usage (Spent)", formatMoney(totals.consumed), "Lifetime token & API consumption", PALETTE[3]),
+    metricCard("Total requests", formatCompact(totals.requests), "Account lifetime requests", PALETTE[4]),
     metricCard("7-day tokens", formatCompact(totals.tokens), "Latest collected windows", PALETTE[5]),
   );
   byId("overview-earnings").textContent = formatMoney(totals.confirmedEarnings);
-  byId("overview-observed-earnings").textContent = `${formatMoney(totals.observedEarnings)} observed balance increases`;
+  byId("overview-observed-earnings").textContent = `${formatMoney(totals.observedEarnings)} confirmed awards`;
 }
 
 function aggregatePortfolioHistory(accountData) {
@@ -1560,7 +1560,11 @@ function handleStreamEvent(event) {
   state.sseLastMessageAt = new Date().toISOString();
   const type = safeLabel(data.eventType || data.type || event.type, "observatory_event").toLowerCase().replaceAll("-", "_");
   const durable = Boolean(data.eventId || event.lastEventId) && data.ephemeral !== true;
-  if (["quota_reset", "confirmed_reset"].includes(type) && durable) runCelebration(false, type === "quota_reset" ? eventPresentation(data).title : "Quota reset confirmed");
+  if (["quota_reset", "confirmed_reset"].includes(type) && durable) {
+    runCelebration(false, "🎉 Weekly Quota Reset Confirmed!", eventPresentation(data).title || "100% capacity restored");
+  } else if (["agentrouter_grant_received", "credit_grant", "grant_confirmed", "balance_increase"].includes(type) && durable) {
+    runCelebration(false, "💰 $25 Daily Grant Confirmed!", eventPresentation(data).detail || "Daily reward awarded to AgentRouter account");
+  }
   scheduleObservatoryRefresh(eventRefreshFamilies(type), 250);
   if (state.activeView === "health") renderHealthView();
 }
@@ -1607,26 +1611,219 @@ function persistCelebrationSettings(settings = celebrationDraftFromControls()) {
   state.celebrationSettings = settings;
   try { localStorage.setItem("ai-fleet-celebration", JSON.stringify(settings)); } catch { /* Storage can be disabled. */ }
 }
-function runCelebration(preview = false, message = "Quota reset confirmed") {
+function showCelebrationHud(title, detail = "") {
+  let hud = byId("celebration-hud");
+  if (!hud) {
+    hud = document.createElement("div");
+    hud.id = "celebration-hud";
+    hud.className = "celebration-hud";
+    document.body.append(hud);
+  }
+  hud.classList.remove("fading");
+  hud.replaceChildren();
+
+  const badge = document.createElement("span");
+  badge.className = "celebration-hud-badge";
+  badge.textContent = "✦ CELEBRATION ✦";
+
+  const titleEl = document.createElement("h3");
+  titleEl.className = "celebration-hud-title";
+  titleEl.textContent = title;
+
+  hud.append(badge, titleEl);
+
+  if (detail) {
+    const detailEl = document.createElement("p");
+    detailEl.className = "celebration-hud-detail";
+    detailEl.textContent = detail;
+    hud.append(detailEl);
+  }
+
+  clearTimeout(state.celebrationHudTimer);
+  state.celebrationHudTimer = setTimeout(() => {
+    hud.classList.add("fading");
+    setTimeout(() => hud.remove(), 500);
+  }, 4500);
+}
+
+function runCelebration(preview = false, title = "Quota reset confirmed", detail = "") {
   const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
-  const settings = preview && byId("settings-dialog").open ? celebrationDraftFromControls() : state.celebrationSettings;
+  const settings = preview && byId("settings-dialog")?.open ? celebrationDraftFromControls() : state.celebrationSettings;
   if (settings.effect === "off") { if (preview) showToast("Celebrations are disabled."); return; }
-  if (reduced) { showToast(`${message}. Animation skipped for reduced motion.`); return; }
+  if (reduced) { showToast(`${title}. Animation skipped for reduced motion.`); return; }
   cancelAnimationFrame(state.celebrationFrame);
   const canvas = byId("celebration-canvas"); const context = canvas.getContext("2d");
   const dpr = Math.min(devicePixelRatio || 1, 2); canvas.width = Math.round(innerWidth * dpr); canvas.height = Math.round(innerHeight * dpr); context.setTransform(dpr, 0, 0, dpr, 0, 0); canvas.classList.add("active");
   const effects = ["fireworks", "confetti", "aurora", "spark"]; const effect = settings.effect === "random" ? effects[Math.floor(Math.random() * effects.length)] : settings.effect;
-  const duration = { short: 2_000, medium: 4_000, long: 6_000 }[settings.duration] || 2_000; const count = { low: 36, medium: 72, high: 126 }[settings.intensity] || 36;
-  const colors = ["#a855f7", "#d946ef", "#67e8f9", "#6ee7b7", "#fbbf24", "#f472b6"];
-  const particles = Array.from({ length: count }, (_, index) => { const angle = Math.random() * Math.PI * 2; const speed = 1.5 + Math.random() * 5; return { x: effect === "fireworks" || effect === "spark" ? innerWidth * (.2 + Math.random() * .6) : Math.random() * innerWidth, y: effect === "confetti" ? -Math.random() * innerHeight : innerHeight * (.25 + Math.random() * .45), vx: Math.cos(angle) * speed, vy: effect === "confetti" ? 1 + Math.random() * 3 : Math.sin(angle) * speed, size: 2 + Math.random() * 5, color: colors[index % colors.length], phase: Math.random() * Math.PI * 2 }; });
+  const duration = { short: 2_500, medium: 4_500, long: 7_000 }[settings.duration] || 2_500; const count = { low: 48, medium: 96, high: 160 }[settings.intensity] || 48;
+  const colors = ["#c084fc", "#e879f9", "#38bdf8", "#34d399", "#fbbf24", "#f472b6", "#a855f7", "#60a5fa"];
+
+  const burstCount = effect === "fireworks" ? 3 : 1;
+  const bursts = Array.from({ length: burstCount }, (_, bIdx) => ({
+    x: innerWidth * (0.2 + (bIdx / (burstCount + 1)) * 0.6 + (Math.random() - 0.5) * 0.15),
+    y: innerHeight * (0.22 + Math.random() * 0.28),
+    delay: bIdx * 350,
+  }));
+
+  const particles = Array.from({ length: count }, (_, index) => {
+    const burst = bursts[index % bursts.length];
+    const angle = Math.random() * Math.PI * 2;
+    const speed = 2 + Math.random() * 6.5;
+    return {
+      burst,
+      x: effect === "confetti" ? Math.random() * innerWidth : burst.x,
+      y: effect === "confetti" ? -Math.random() * (innerHeight * 0.4) : burst.y,
+      vx: Math.cos(angle) * speed,
+      vy: effect === "confetti" ? 1.2 + Math.random() * 3.5 : Math.sin(angle) * speed,
+      size: 2.5 + Math.random() * 5,
+      color: colors[index % colors.length],
+      phase: Math.random() * Math.PI * 2,
+      sparkle: Math.random() > 0.4,
+    };
+  });
+
   const started = performance.now();
   const frame = (now) => {
-    const elapsed = now - started; const progress = elapsed / duration; context.clearRect(0, 0, innerWidth, innerHeight);
-    if (effect === "aurora") { context.globalAlpha = Math.sin(Math.min(1, progress) * Math.PI) * .26; for (let band = 0; band < 4; band += 1) { const gradient = context.createLinearGradient(0, 0, innerWidth, innerHeight); gradient.addColorStop(0, colors[band]); gradient.addColorStop(1, colors[band + 2]); context.strokeStyle = gradient; context.lineWidth = 55; context.beginPath(); for (let x = -40; x <= innerWidth + 40; x += 30) { const y = innerHeight * (.25 + band * .14) + Math.sin(x * .009 + now * .0015 + band) * 70; if (x === -40) context.moveTo(x, y); else context.lineTo(x, y); } context.stroke(); } }
-    else { context.globalAlpha = Math.max(0, 1 - progress); for (const particle of particles) { particle.x += particle.vx; particle.y += particle.vy; particle.vy += effect === "confetti" ? .015 : .035; particle.phase += .12; context.fillStyle = particle.color; context.save(); context.translate(particle.x, particle.y); context.rotate(particle.phase); if (effect === "confetti") context.fillRect(-particle.size, -particle.size / 2, particle.size * 2.2, particle.size); else { context.beginPath(); context.arc(0, 0, particle.size * (1 - progress * .5), 0, Math.PI * 2); context.fill(); } context.restore(); } }
-    if (elapsed < duration) state.celebrationFrame = requestAnimationFrame(frame); else { context.clearRect(0, 0, innerWidth, innerHeight); canvas.classList.remove("active"); }
+    const elapsed = now - started;
+    const progress = elapsed / duration;
+    context.clearRect(0, 0, innerWidth, innerHeight);
+
+    if (effect === "aurora") {
+      context.globalAlpha = Math.sin(Math.min(1, progress) * Math.PI) * 0.32;
+      for (let band = 0; band < 5; band += 1) {
+        const gradient = context.createLinearGradient(0, 0, innerWidth, innerHeight);
+        gradient.addColorStop(0, colors[band % colors.length]);
+        gradient.addColorStop(1, colors[(band + 2) % colors.length]);
+        context.strokeStyle = gradient;
+        context.lineWidth = 60;
+        context.beginPath();
+        for (let x = -40; x <= innerWidth + 40; x += 25) {
+          const y = innerHeight * (0.2 + band * 0.13) + Math.sin(x * 0.008 + now * 0.002 + band) * 80;
+          if (x === -40) context.moveTo(x, y);
+          else context.lineTo(x, y);
+        }
+        context.stroke();
+      }
+    } else {
+      context.globalAlpha = Math.max(0, 1 - progress);
+      for (const particle of particles) {
+        if (elapsed < particle.burst.delay && effect === "fireworks") continue;
+        particle.x += particle.vx;
+        particle.y += particle.vy;
+        particle.vy += effect === "confetti" ? 0.02 : 0.045;
+        particle.vx *= 0.985;
+        particle.phase += 0.15;
+
+        context.fillStyle = particle.color;
+        context.save();
+        context.translate(particle.x, particle.y);
+        context.rotate(particle.phase);
+
+        if (effect === "confetti") {
+          context.fillRect(-particle.size, -particle.size / 2, particle.size * 2.4, particle.size);
+        } else {
+          context.beginPath();
+          const radius = particle.size * Math.max(0.2, 1 - progress * 0.6);
+          if (particle.sparkle && Math.sin(particle.phase * 3) > 0) {
+            context.shadowBlur = 12;
+            context.shadowColor = particle.color;
+          }
+          context.arc(0, 0, radius, 0, Math.PI * 2);
+          context.fill();
+        }
+        context.restore();
+      }
+    }
+
+    if (elapsed < duration) {
+      state.celebrationFrame = requestAnimationFrame(frame);
+    } else {
+      context.clearRect(0, 0, innerWidth, innerHeight);
+      canvas.classList.remove("active");
+    }
   };
-  state.celebrationFrame = requestAnimationFrame(frame); showToast(preview ? `Previewing ${effect} celebration.` : message);
+
+  state.celebrationFrame = requestAnimationFrame(frame);
+  showCelebrationHud(preview ? `Previewing ${effect} celebration` : title, preview ? "Celebration animation preview" : detail);
+  showToast(preview ? `Previewing ${effect} celebration.` : title);
+}
+
+let liveTickerTimer = null;
+let liveTickerInFlight = false;
+
+function updateLiveCountdowns() {
+  document.querySelectorAll("[data-countdown-to]").forEach((node) => {
+    const targetIso = node.getAttribute("data-countdown-to");
+    if (!targetIso) return;
+    const target = Date.parse(targetIso);
+    if (!Number.isFinite(target)) return;
+    const diffMs = target - Date.now();
+    if (diffMs <= 0) {
+      node.textContent = "due now";
+      return;
+    }
+    const totalSeconds = Math.floor(diffMs / 1000);
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+    if (hours > 24) {
+      const days = Math.floor(hours / 24);
+      const remHours = hours % 24;
+      node.textContent = `${days}d ${remHours}h`;
+    } else if (hours > 0) {
+      node.textContent = `${hours}h ${String(minutes).padStart(2, "0")}m ${String(seconds).padStart(2, "0")}s`;
+    } else {
+      node.textContent = `${minutes}m ${String(seconds).padStart(2, "0")}s`;
+    }
+  });
+}
+
+function applyLiveSnapshot(live) {
+  if (!live || typeof live !== "object") return;
+  state.lastLiveSnapshot = live;
+
+  if (Array.isArray(live.agentrouter)) {
+    for (const acc of live.agentrouter) {
+      const known = state.knownBalances?.[acc.accountId];
+      if (known !== undefined && acc.balance !== null && acc.balance > known) {
+        const delta = (acc.balance - known).toFixed(2);
+        runCelebration(
+          false,
+          `💰 AgentRouter +$${delta} Grant Confirmed!`,
+          `Account: ${acc.accountLabel} · New Balance: $${acc.balance.toFixed(2)} · Fleet Total: $${live.totals?.totalBalance?.toFixed(2) || "0.00"}`
+        );
+      }
+      state.knownBalances = state.knownBalances || {};
+      if (acc.balance !== null) state.knownBalances[acc.accountId] = acc.balance;
+    }
+  }
+
+  if (live.totals) {
+    const sseChip = byId("sse-state");
+    if (sseChip && !sseChip.classList.contains("error")) {
+      const label = sseChip.querySelector("span");
+      if (label) label.textContent = "Live: 1s sync";
+    }
+  }
+}
+
+function startLiveTicker() {
+  if (liveTickerTimer) clearInterval(liveTickerTimer);
+  liveTickerTimer = setInterval(async () => {
+    updateLiveCountdowns();
+
+    if (!liveTickerInFlight) {
+      liveTickerInFlight = true;
+      try {
+        const live = await api("/api/observatory/live");
+        if (live) applyLiveSnapshot(live);
+      } catch {
+        // Quiet fallback
+      } finally {
+        liveTickerInFlight = false;
+      }
+    }
+  }, 1000);
 }
 
 function focusableIn(dialog) {
@@ -1972,6 +2169,7 @@ async function initialize() {
   connectObservatoryStream();
   state.challengeTicker = setInterval(updateChallengeCountdown, 1_000);
   refresh();
+  startLiveTicker();
 }
 
 initialize();

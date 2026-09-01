@@ -186,7 +186,7 @@ describe("loadConfig Observatory controls", () => {
     expect(config.observatory.enabled).toBe(false);
     expect(config.observatory.dbPath).toBe("data/observatory.sqlite");
     expect(config.observatory.hmacKey).toBeNull();
-    expect(config.observatory.pollIntervalMinutes).toBe(5);
+    expect(config.observatory.pollIntervalMinutes).toBe(1);
     expect(config.observatory.retentionDays).toBe(14);
     expect(config.observatory.retentionPruneIntervalMinutes).toBe(60);
     expect(config.observatory.deliveryLeaseDurationMs).toBe(30_000);

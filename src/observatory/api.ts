@@ -242,6 +242,79 @@ export async function handleObservatoryApi(
       events: events.map(eventDto),
     });
   }
+  // 1b. Live Real-Time Snapshot
+  if (method === "GET" && pathname === "/api/observatory/live") {
+    const now = new Date().toISOString();
+    const hosts = context.store.listHosts();
+    const identities = context.store.listIdentities();
+    const quotas = context.store.listCurrentQuotaWindows();
+    const sessions = context.store.listSessionSummaries({ limit: 20 });
+    const events = context.store.listEvents({ limit: 15 });
+    const arAccounts = context.store.listAgentRouterAccounts();
+    const agentrouter = arAccounts.map((acc) => {
+      const endpoints = context.store.listAgentRouterEndpointObservations({ accountId: acc.accountId, limit: 1 });
+      const runs = context.store.listAgentRouterRuns({ accountId: acc.accountId, limit: 1 });
+      const grants = context.store.listAgentRouterGrantEvents({ accountId: acc.accountId, limit: 5 });
+      const latestEndpoint = endpoints[0] ?? null;
+      const latestRun = runs[0] ?? null;
+      const balance = latestEndpoint?.balance ?? latestRun?.balance ?? null;
+      const consumed = latestEndpoint?.consumed ?? latestRun?.consumed ?? null;
+      const requestCount = latestEndpoint?.requestCount ?? latestRun?.requestCount ?? null;
+      const status = latestEndpoint?.status ?? latestRun?.status ?? "ok";
+      const lastObservedAt = latestEndpoint?.observedAt ?? latestRun?.startedAt ?? acc.updatedAt;
+      return {
+        accountId: acc.accountId,
+        accountLabel: acc.accountLabel,
+        balance,
+        consumed,
+        requestCount,
+        status,
+        lastObservedAt,
+        recentGrants: grants.map((g) => ({
+          id: g.id,
+          occurredAt: g.occurredAt,
+          amount: g.amount,
+          classification: g.classification,
+        })),
+      };
+    });
+
+    const totalBalance = agentrouter.reduce((sum, a) => sum + (a.balance || 0), 0);
+    const totalConsumed = agentrouter.reduce((sum, a) => sum + (a.consumed || 0), 0);
+    const totalRequests = agentrouter.reduce((sum, a) => sum + (a.requestCount || 0), 0);
+    const onlineHosts = hosts.filter((h) => h.status === "online").length;
+    const warningQuotas = quotas.filter((w) =>
+      ["warning", "critical", "exhausted"].includes(String(w.status)),
+    ).length;
+    const activeSessions = sessions.filter((s) => s.status === "active").length;
+    const coordStatus = context.coordinator.getStatus();
+
+    return jsonResponse({
+      timestamp: now,
+      totals: {
+        totalBalance: Number(totalBalance.toFixed(2)),
+        totalConsumed: Number(totalConsumed.toFixed(2)),
+        totalRequests,
+        hostsCount: hosts.length,
+        onlineHostsCount: onlineHosts,
+        identitiesCount: identities.length,
+        warningQuotasCount: warningQuotas,
+        activeSessionsCount: activeSessions,
+      },
+      agentrouter,
+      quotas: quotas.map(quotaDto),
+      identities: identities.map(identityDto),
+      hosts: hosts.map(hostDto),
+      sessions: sessions.map(sessionDto),
+      recentEvents: events.map(eventDto),
+      coordinator: {
+        running: coordStatus.running,
+        lastProbeAt: coordStatus.lastProbeAt,
+        lastProbeStatus: coordStatus.lastProbeStatus,
+        nextProbeAt: coordStatus.nextProbeAt,
+      },
+    });
+  }
 
   // 2. Quotas
   if (method === "GET" && pathname === "/api/observatory/quotas") {
