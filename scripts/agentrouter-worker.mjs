@@ -250,6 +250,22 @@ function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+function isPageAtConfiguredOrigin(page, baseUrl) {
+  try {
+    return new URL(page.url()).origin === new URL(baseUrl).origin;
+  } catch {
+    return false;
+  }
+}
+
+function isGitHubPage(page) {
+  try {
+    return new URL(page.url()).origin === "https://github.com";
+  } catch {
+    return false;
+  }
+}
+
 async function isVisible(locator) {
   return locator.isVisible().catch(() => false);
 }
@@ -275,6 +291,37 @@ async function readStoredUser(page) {
     return null;
   }
   return { ...value, id };
+}
+
+async function hasExpectedStoredUser(page, baseUrl, userId) {
+  const expectedOrigin = new URL(baseUrl).origin;
+  return page.evaluate(({ expectedOrigin, expectedUserId }) => {
+    if (location.origin !== expectedOrigin) return false;
+    const raw = localStorage.getItem("user");
+    if (!raw) return false;
+    try {
+      return Number(JSON.parse(raw).id) === expectedUserId;
+    } catch {
+      return false;
+    }
+  }, { expectedOrigin, expectedUserId: userId });
+}
+
+async function clearExpectedStoredUser(page, baseUrl, userId) {
+  const expectedOrigin = new URL(baseUrl).origin;
+  return page.evaluate(({ expectedOrigin, expectedUserId }) => {
+    if (location.origin !== expectedOrigin) return false;
+    const raw = localStorage.getItem("user");
+    if (raw !== null) {
+      try {
+        if (Number(JSON.parse(raw).id) !== expectedUserId) return false;
+      } catch {
+        return false;
+      }
+      localStorage.removeItem("user");
+    }
+    return localStorage.getItem("user") === null;
+  }, { expectedOrigin, expectedUserId: userId });
 }
 
 function apiHeaders(userId) {
@@ -462,27 +509,38 @@ async function clickGithubLogin(page, timeoutMs) {
 }
 
 async function openGithubOAuthPage(page, baseUrl, timeoutMs) {
-  const oauth = await page.evaluate(async () => {
-    let status = {};
-    try {
-      status = JSON.parse(localStorage.getItem("status") || "{}");
-    } catch {
-      status = {};
+  if (!isPageAtConfiguredOrigin(page, baseUrl)) {
+    throw new Error("AgentRouter OAuth setup requires the configured origin.");
+  }
+  const expectedOrigin = new URL(baseUrl).origin;
+  const oauth = await page.evaluate(async (expectedOrigin) => {
+    if (location.origin !== expectedOrigin) {
+      throw new Error("AgentRouter OAuth setup left the configured origin.");
     }
-    if (!status.github_client_id) {
-      const statusResponse = await fetch("/api/status", {
-        credentials: "include",
-        headers: { Accept: "application/json" },
-        cache: "no-store",
-      });
-      const statusPayload = await statusResponse.json();
-      status = statusPayload?.data ?? statusPayload ?? {};
+    const statusResponse = await fetch("/api/status", {
+      credentials: "include",
+      headers: { Accept: "application/json" },
+      cache: "no-store",
+    });
+    if (
+      new URL(statusResponse.url).origin !== expectedOrigin ||
+      !statusResponse.headers.get("content-type")?.toLowerCase().includes("application/json")
+    ) {
+      throw new Error("AgentRouter status response was not trusted JSON.");
     }
+    const statusPayload = await statusResponse.json();
+    const status = statusPayload?.data ?? statusPayload ?? {};
     const stateResponse = await fetch("/api/oauth/state?mode=login", {
       credentials: "include",
       headers: { Accept: "application/json" },
       cache: "no-store",
     });
+    if (
+      new URL(stateResponse.url).origin !== expectedOrigin ||
+      !stateResponse.headers.get("content-type")?.toLowerCase().includes("application/json")
+    ) {
+      throw new Error("AgentRouter OAuth state response was not trusted JSON.");
+    }
     const statePayload = await stateResponse.json();
     if (!stateResponse.ok || statePayload?.success !== true || typeof statePayload.data !== "string") {
       throw new Error(statePayload?.message || "AgentRouter did not issue a GitHub OAuth state.");
@@ -492,7 +550,7 @@ async function openGithubOAuthPage(page, baseUrl, timeoutMs) {
       clientId: status.github_client_id,
       state: statePayload.data,
     };
-  });
+  }, expectedOrigin);
 
   if (typeof oauth.clientId !== "string" || !/^[A-Za-z0-9_-]{5,100}$/.test(oauth.clientId)) {
     throw new Error("AgentRouter did not expose a valid GitHub OAuth client id.");
@@ -510,7 +568,7 @@ async function openGithubOAuthPage(page, baseUrl, timeoutMs) {
     waitUntil: "domcontentloaded",
     timeout: timeoutMs,
   });
-  if (!oauthPage.url().startsWith("https://github.com/") && !oauthPage.url().startsWith(baseUrl)) {
+  if (!isGitHubPage(oauthPage) && !isPageAtConfiguredOrigin(oauthPage, baseUrl)) {
     throw new Error("GitHub OAuth navigated to an unexpected origin.");
   }
   return oauthPage;
@@ -660,10 +718,10 @@ async function completeGithubAuthentication(page, account, config) {
       }
     }
 
-    if (page.isClosed() || !page.url().includes("github.com")) {
+    if (page.isClosed() || !isGitHubPage(page)) {
       const githubPage = [...context.pages()]
         .reverse()
-        .find((candidate) => !candidate.isClosed() && candidate.url().includes("github.com"));
+        .find((candidate) => !candidate.isClosed() && isGitHubPage(candidate));
       if (githubPage) {
         page = githubPage;
       } else {
@@ -1174,7 +1232,9 @@ async function dismissBlockingOverlays(page) {
 
 async function logoutViaApi(page, config, userId, apiCalls) {
   const started = Date.now();
-  const response = await page.evaluate(async (numericUserId) => {
+  const expectedOrigin = new URL(config.baseUrl).origin;
+  const response = await page.evaluate(async ({ numericUserId, expectedOrigin }) => {
+    if (location.origin !== expectedOrigin) return null;
     const headers = {
       Accept: 'application/json',
       'Cache-Control': 'no-store',
@@ -1191,16 +1251,23 @@ async function logoutViaApi(page, config, userId, apiCalls) {
       credentials: 'include',
       headers,
     });
-    const selfPayload = await self.json().catch(() => null);
+    const selfContentType = self.headers.get('content-type')?.toLowerCase() ?? '';
+    const selfPayload = selfContentType.includes('application/json')
+      ? await self.json().catch(() => null)
+      : null;
     return {
       status: result.status,
       ok:
+        new URL(result.url).origin === expectedOrigin &&
+        new URL(self.url).origin === expectedOrigin &&
         result.ok &&
         payload?.success === true &&
-        (self.status === 401 || self.status === 403 || selfPayload?.success === false),
+        selfContentType.includes('application/json') &&
+        [200, 401, 403].includes(self.status) &&
+        selfPayload?.success === false,
       contentType: result.headers.get('content-type') ?? '',
     };
-  }, userId).catch(() => null);
+  }, { numericUserId: userId, expectedOrigin }).catch(() => null);
   apiCalls.push({
     path: '/api/user/logout',
     status: response?.status ?? 0,
@@ -1210,16 +1277,20 @@ async function logoutViaApi(page, config, userId, apiCalls) {
     source: 'api-logout',
   });
   if (!response?.ok) return false;
-  await page.evaluate(() => localStorage.removeItem('user')).catch(() => undefined);
+  const storageCleared = await clearExpectedStoredUser(page, config.baseUrl, userId);
+  if (!storageCleared) return false;
   await page.goto(`${config.baseUrl}/login`, {
     waitUntil: 'domcontentloaded',
     timeout: config.requestTimeoutMs,
   }).catch(() => undefined);
-  return new URL(page.url()).pathname === '/login' && !(await readStoredUser(page));
+  const loginUrl = new URL(page.url());
+  return loginUrl.origin === expectedOrigin && loginUrl.pathname === '/login';
 }
 
-async function isServerSessionLoggedOut(page, userId) {
-  const observation = await page.evaluate(async (numericUserId) => {
+async function isServerSessionLoggedOut(page, userId, baseUrl) {
+  const expectedOrigin = new URL(baseUrl).origin;
+  const observation = await page.evaluate(async ({ numericUserId, expectedOrigin }) => {
+    if (location.origin !== expectedOrigin) return null;
     const response = await fetch('/api/user/self', {
       credentials: 'include',
       headers: {
@@ -1233,9 +1304,13 @@ async function isServerSessionLoggedOut(page, userId) {
       ? await response.json().catch(() => null)
       : null;
     return {
-      loggedOut: response.status === 401 || response.status === 403 || payload?.success === false,
+      loggedOut:
+        new URL(response.url).origin === expectedOrigin &&
+        contentType.includes('application/json') &&
+        [200, 401, 403].includes(response.status) &&
+        payload?.success === false,
     };
-  }, userId).catch(() => null);
+  }, { numericUserId: userId, expectedOrigin }).catch(() => null);
   return observation?.loggedOut === true;
 }
 
@@ -1303,46 +1378,71 @@ async function captureAgentRouterApiToken(page, config, userId, apiCalls) {
 async function logoutAndPersist(context, page, config, userId, statePath, apiCalls) {
   const started = Date.now();
   let redirectedToLogin = false;
+  let storageCleared = false;
   let uiError = "";
   let logoutMethod = "api";
+  if (page.isClosed() || !(await hasExpectedStoredUser(page, config.baseUrl, userId))) {
+    return false;
+  }
   if (!page.isClosed()) {
     // The endpoint is the same operation used by the UI and avoids waiting on
     // Semi Design hover/menu animations that are not reliable on the server.
     redirectedToLogin = await logoutViaApi(page, config, userId, apiCalls);
+    storageCleared = redirectedToLogin;
   }
   if (!redirectedToLogin && !page.isClosed()) {
     logoutMethod = "visible-quit-fallback";
+    let protectedConsoleExpiredRedirect = false;
     try {
       await page.goto(`${config.baseUrl}/console`, {
         waitUntil: "domcontentloaded",
         timeout: config.requestTimeoutMs,
       });
-      await page.locator("main").waitFor({ state: "visible", timeout: config.requestTimeoutMs });
-      await dismissBlockingOverlays(page);
-      const profileButton = page.locator('button[aria-haspopup="menu"]').first();
-      await profileButton.hover().catch(() => undefined);
-      await profileButton.click({ timeout: 10_000 }).catch(async () => {
+      const consoleProbeUrl = new URL(page.url());
+      if (consoleProbeUrl.origin !== new URL(config.baseUrl).origin) {
+        throw new Error("AgentRouter protected Console navigation left the configured origin.");
+      }
+      protectedConsoleExpiredRedirect = (
+        consoleProbeUrl.pathname === "/login" &&
+        consoleProbeUrl.searchParams.get("expired") === "true"
+      );
+      if (new URL(page.url()).pathname !== "/login") {
+        await page.locator("main").waitFor({ state: "visible", timeout: config.requestTimeoutMs });
         await dismissBlockingOverlays(page);
-        await profileButton.click({ force: true, timeout: 5_000 });
-      });
-      const quit = page.getByRole("menuitem", { name: /Quit/i }).first();
-      await quit.waitFor({ state: "visible", timeout: 10_000 });
-      await quit.click({ timeout: 10_000 });
-      await page.waitForURL(/\/login(?:[?#]|$)/, { timeout: 15_000 });
+        const profileButton = page.locator('button[aria-haspopup="menu"]').first();
+        await profileButton.hover().catch(() => undefined);
+        await profileButton.click({ timeout: 10_000 }).catch(async () => {
+          await dismissBlockingOverlays(page);
+          await profileButton.click({ force: true, timeout: 5_000 });
+        });
+        const quit = page.getByRole("menuitem", { name: /Quit/i }).first();
+        await quit.waitFor({ state: "visible", timeout: 10_000 });
+        await quit.click({ timeout: 10_000 });
+        await page.waitForURL(/\/login(?:[?#]|$)/, { timeout: 15_000 });
+      }
     } catch (error) {
       uiError = errorText(error);
     }
-    if (!page.isClosed() && new URL(page.url()).pathname === "/login") {
-      if (await isServerSessionLoggedOut(page, userId)) {
-        await page.evaluate(() => localStorage.removeItem("user")).catch(() => undefined);
-        redirectedToLogin = true;
-        uiError = "";
-      } else if (!uiError) {
-        uiError = "AgentRouter showed /login but the current browser session remained authenticated.";
+    if (!page.isClosed()) {
+      const loginUrl = new URL(page.url());
+      const isAgentRouterLogin = (
+        loginUrl.origin === new URL(config.baseUrl).origin &&
+        loginUrl.pathname === "/login"
+      );
+      if (isAgentRouterLogin) {
+        const serverLoggedOut = await isServerSessionLoggedOut(page, userId, config.baseUrl);
+        const expiredSessionRedirect = protectedConsoleExpiredRedirect;
+        if (serverLoggedOut || expiredSessionRedirect) {
+          storageCleared = await clearExpectedStoredUser(page, config.baseUrl, userId);
+          redirectedToLogin = storageCleared;
+          if (storageCleared) uiError = "";
+        } else if (!uiError) {
+          uiError = "AgentRouter showed /login without confirming that the browser session ended.";
+        }
       }
     }
   }
-  const loggedOut = redirectedToLogin && !(await readStoredUser(page));
+  const loggedOut = redirectedToLogin && storageCleared;
   if (loggedOut) {
     const failedApiLogout = [...apiCalls].reverse().find(
       (call) => call.source === "api-logout" && !call.ok && !call.recovered,
@@ -1451,6 +1551,9 @@ async function runWorker({ account, config }) {
       timeout: config.requestTimeoutMs,
     });
     throwIfCancelled();
+    if (!isPageAtConfiguredOrigin(activePage, config.baseUrl)) {
+      throw new Error("AgentRouter login navigation left the configured origin.");
+    }
     const staleAgentRouterUser = await readStoredUser(activePage);
     if (staleAgentRouterUser) {
       progress(
@@ -1473,6 +1576,9 @@ async function runWorker({ account, config }) {
         waitUntil: "domcontentloaded",
         timeout: config.requestTimeoutMs,
       });
+      if (!isPageAtConfiguredOrigin(activePage, config.baseUrl)) {
+        throw new Error("AgentRouter post-logout login navigation left the configured origin.");
+      }
     }
     const oauthPage = await openGithubOAuthPage(
       activePage,
@@ -1638,10 +1744,14 @@ async function runWorker({ account, config }) {
     }
 
     if (context && !result.loggedOut) {
-      let cleanupPage = activePage && !activePage.isClosed() ? activePage : null;
+      let cleanupPage = (
+        activePage &&
+        !activePage.isClosed() &&
+        isPageAtConfiguredOrigin(activePage, config.baseUrl)
+      ) ? activePage : null;
       let cleanupUserId = authenticatedUserId;
       for (const candidate of context.pages()) {
-        if (candidate.isClosed() || !candidate.url().startsWith(config.baseUrl)) continue;
+        if (candidate.isClosed() || !isPageAtConfiguredOrigin(candidate, config.baseUrl)) continue;
         const candidateUser = await readStoredUser(candidate);
         if (candidateUser) {
           cleanupPage = candidate;
