@@ -1341,8 +1341,19 @@ async function logoutAndPersist(context, page, config, userId, statePath, apiCal
     } catch (error) {
       uiError = errorText(error);
     }
+    if (!page.isClosed() && new URL(page.url()).pathname === "/login") {
+      await page.evaluate(() => localStorage.removeItem("user")).catch(() => undefined);
+      redirectedToLogin = true;
+      uiError = "";
+    }
   }
   const loggedOut = redirectedToLogin && !(await readStoredUser(page));
+  if (loggedOut) {
+    const failedApiLogout = [...apiCalls].reverse().find(
+      (call) => call.source === "api-logout" && !call.ok && !call.recovered,
+    );
+    if (failedApiLogout) failedApiLogout.recovered = true;
+  }
   apiCalls.push({
     path: logoutMethod === "api" ? "/api/user/logout → /login" : "/console → profile menu → Quit",
     method: logoutMethod === "api" ? "GET" : "UI",
@@ -1595,9 +1606,8 @@ async function runWorker({ account, config }) {
       authenticatedUserId,
       result.apiCalls,
     ) ?? undefined;
-    await persistAgentRouterState(context, monitorStatePath, config.baseUrl);
 
-    progress("logging-out", "Token and minute-poll session captured. Verifying AgentRouter logout.", 92);
+    progress("logging-out", "Token captured. Verifying AgentRouter logout.", 92);
     result.loggedOut = await logoutAndPersist(
       context,
       activePage,
@@ -1609,13 +1619,33 @@ async function runWorker({ account, config }) {
     if (!result.loggedOut) {
       throw new Error("AgentRouter's visible Quit flow did not confirm logout.");
     }
+    // Any failure during monitor authentication must force-clean the new AgentRouter session.
+    result.loggedOut = false;
+    progress("monitor-session", "Logout confirmed. Creating the dedicated read-only polling session.", 96);
+    const monitorOauthPage = await openGithubOAuthPage(
+      activePage,
+      config.baseUrl,
+      config.requestTimeoutMs,
+    );
+    activePage = monitorOauthPage;
+    await completeGithubAuthentication(monitorOauthPage, account, config);
+    const monitorAuthenticated = await waitForAgentRouterUser(
+      context,
+      config.baseUrl,
+      config.loginTimeoutMs,
+    );
+    activePage = monitorAuthenticated.page;
+    authenticatedUserId = monitorAuthenticated.user.id;
+    await persistAgentRouterState(context, monitorStatePath, config.baseUrl);
+    progress("monitor-session-ready", "Read-only polling session refreshed for the next hour.", 98);
 
     const failedCall = result.apiCalls.find((call) => !call.ok && !call.recovered);
     if (failedCall) {
       throw new Error(`AgentRouter UI step failed: ${failedCall.path} returned ${failedCall.status}.`);
     }
-    log(`[${account.label}] data saved and AgentRouter logout confirmed`);
-    progress("complete", "Snapshot saved and AgentRouter logout confirmed through Quit.", 100);
+    result.loggedOut = true;
+    log(`[${account.label}] data saved, interactive logout confirmed, and read-only polling session refreshed`);
+    progress("complete", "Snapshot saved, logout verified, and minute polling session refreshed.", 100);
   } catch (error) {
     result.status = "error";
     result.errorMessage = errorText(error);
