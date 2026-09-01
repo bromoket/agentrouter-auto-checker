@@ -1384,14 +1384,15 @@ async function runWorker({ account, config }) {
   };
 
   let context;
-    if (config.captureScreenshots) {
-      if (process.platform === "win32") {
-        log(`[${account.label}] screenshots are unsupported on Windows; skipping`);
-      } else {
-        const root = await openSecureScreenshotDirectory(config.screenshotDir);
-        await root.handle.close();
-      }
+  let launchAttempts = 0;
+  if (config.captureScreenshots) {
+    if (process.platform === "win32") {
+      log(`[${account.label}] screenshots are unsupported on Windows; skipping`);
+    } else {
+      const root = await openSecureScreenshotDirectory(config.screenshotDir);
+      await root.handle.close();
     }
+  }
 
   try {
     await mkdir(config.accountStateDir, { recursive: true });
