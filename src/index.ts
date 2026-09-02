@@ -173,6 +173,9 @@ async function main(): Promise<void> {
     accounts,
     observatoryStore,
     observatoryCoordinator,
+    dashboardApiKey: config.dashboardAuth.enabled
+      ? (process.env.DASHBOARD_API_KEY?.trim() || undefined)
+      : undefined,
   });
   if (telegram) {
     console.log("telegram: interactive command listener active (/status, /quotas, /balance, /dashboard)");

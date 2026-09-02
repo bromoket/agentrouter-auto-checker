@@ -15,12 +15,37 @@ import {
   buildQuotasMessages,
   buildStatusMessage,
   buildStatusMessages,
+  buildStrangerTaunt,
+  commandMenuMarkup,
+  COMMAND_MENU,
   isCurrentBudapestDay,
   selectUnifiedAccountSnapshots,
   TelegramNotifier,
   type TelegramUpdate,
 } from "./telegram";
 const resources: Array<{ directory: string; store: Store }> = [];
+
+interface FakeSendBody {
+  text?: string;
+  chat_id?: string;
+  reply_markup?: { inline_keyboard?: unknown[][] };
+}
+
+function sendBody(value: unknown): FakeSendBody {
+  const out: FakeSendBody = {};
+  if (!value || typeof value !== "object" || Array.isArray(value)) return out;
+  const record = value as Record<string, unknown>;
+  if (typeof record.text === "string") out.text = record.text;
+  if (typeof record.chat_id === "string") out.chat_id = record.chat_id;
+  const markup = record.reply_markup;
+  if (markup && typeof markup === "object" && !Array.isArray(markup)) {
+    const markupRecord = markup as Record<string, unknown>;
+    if (Array.isArray(markupRecord.inline_keyboard)) {
+      out.reply_markup = { inline_keyboard: markupRecord.inline_keyboard };
+    }
+  }
+  return out;
+}
 
 function config(stateFilePath: string, overrides: Partial<AppConfig["telegram"]> = {}): AppConfig {
   return {
@@ -493,8 +518,19 @@ describe("TelegramNotifier", () => {
     const outcomeUser = await notifier.processCommandUpdate(unauthorizedUser, { store });
     expect(outcomeUser).toBe("ignored");
 
+    // Strangers receive only the taunt, never command data.
     const messages = telegram.calls.filter((call) => call.method === "sendMessage");
-    expect(messages).toHaveLength(0);
+    expect(messages).toHaveLength(2);
+    for (const message of messages) {
+      const body = sendBody(message.body);
+      expect(body.text).toContain("Wrong door");
+      expect(body.text).not.toContain("Portfolio");
+      expect(body.text).not.toContain("Observatory controls");
+      expect(body.text).not.toContain("http");
+      expect(body.text).not.toContain("$");
+    }
+    expect(messages.some((call) => sendBody(call.body).chat_id === "999999999")).toBe(true);
+    expect(messages.some((call) => sendBody(call.body).chat_id === "123456789")).toBe(true);
   });
 
   test("responds to /start and /help commands with authorized username and dashboard link", async () => {
@@ -918,5 +954,140 @@ describe("TelegramNotifier", () => {
     expect(text).not.toContain("<script>");
     expect(text).toContain("&lt;script&gt;");
     expect(text.length).toBeLessThanOrEqual(4_096);
+  });
+
+  test("menu markup exposes exactly the owner command buttons", () => {
+    const markup = commandMenuMarkup();
+    const labels = markup.inline_keyboard.flat().map((button) => button.callback_data);
+    expect(labels.sort()).toEqual(COMMAND_MENU.map(([, data]) => data).sort());
+    for (const row of markup.inline_keyboard) {
+      expect(row.length).toBeLessThanOrEqual(2);
+    }
+  });
+
+  test("/menu returns the control buttons to the owner", async () => {
+    const { store, telegram, appConfig } = await fixture();
+    const notifier = (await TelegramNotifier.create(appConfig, store, telegram.fetcher))!;
+    const update: TelegramUpdate = {
+      update_id: 1,
+      message: {
+        message_id: 201,
+        chat: { id: "123456789", type: "private" },
+        from: { id: 123456789, is_bot: false, first_name: "Owner", username: "bromoketone" },
+        date: Math.floor(Date.now() / 1000),
+        text: "/menu",
+      },
+    };
+    expect(await notifier.processCommandUpdate(update, { store })).toBe("acknowledged");
+    const message = telegram.calls.find((call) => call.method === "sendMessage");
+    expect(message).toBeDefined();
+    const body = sendBody(message?.body);
+    expect(body.text).toContain("Observatory controls");
+    expect(body.reply_markup?.inline_keyboard?.length ?? 0).toBeGreaterThanOrEqual(3);
+  });
+
+  test("/key returns the dashboard API key only to the owner with a provider", async () => {
+    const { store, telegram, appConfig } = await fixture();
+    const notifier = (await TelegramNotifier.create(appConfig, store, telegram.fetcher))!;
+    const update: TelegramUpdate = {
+      update_id: 1,
+      message: {
+        message_id: 301,
+        chat: { id: "123456789", type: "private" },
+        from: { id: 123456789, is_bot: false, first_name: "Owner", username: "bromoketone" },
+        date: Math.floor(Date.now() / 1000),
+        text: "/key",
+      },
+    };
+    await notifier.processCommandUpdate(update, { store, dashboardApiKey: "z".repeat(48) });
+    const messages = telegram.calls.filter((call) => call.method === "sendMessage");
+    expect(messages).toHaveLength(1);
+    expect(sendBody(messages[0]?.body).text).toContain("Dashboard API key");
+    expect(sendBody(messages[0]?.body).text).toContain("z".repeat(24));
+
+    const withoutKey = await fixture();
+    const bareNotifier = (await TelegramNotifier.create(withoutKey.appConfig, withoutKey.store, withoutKey.telegram.fetcher))!;
+    await bareNotifier.processCommandUpdate(update, { store: withoutKey.store });
+    const bareMessages = withoutKey.telegram.calls.filter((call) => call.method === "sendMessage");
+    expect(bareMessages).toHaveLength(1);
+    expect(sendBody(bareMessages[0]?.body).text).toContain("not available");
+  });
+
+  test("strangers get a taunt and never command data", async () => {
+    const { store, telegram, appConfig } = await fixture();
+    const notifier = (await TelegramNotifier.create(appConfig, store, telegram.fetcher))!;
+    const intruder: TelegramUpdate = {
+      update_id: 1,
+      message: {
+        message_id: 401,
+        chat: { id: "987654321", type: "private" },
+        from: { id: 987654321, is_bot: false, first_name: "Hacker", username: "hacker_dude" },
+        date: Math.floor(Date.now() / 1000),
+        text: "/balance",
+      },
+    };
+    expect(await notifier.processCommandUpdate(intruder, { store })).toBe("ignored");
+    const message = telegram.calls.find((call) => call.method === "sendMessage");
+    expect(message).toBeDefined();
+    const body = sendBody(message?.body);
+    expect(body.chat_id).toBe("987654321");
+    expect(body.text).toContain("Wrong door");
+    expect(body.text).not.toContain("$");
+  });
+
+  test("stranger taunt helper is bounded and unhelpful", () => {
+    const taunt = buildStrangerTaunt("somebody");
+    expect(taunt).toContain("Wrong door");
+    expect(taunt).toContain("owner-only");
+    expect(taunt.length).toBeLessThanOrEqual(1_024);
+  });
+
+  test("owner callbacks dispatch commands; stranger callbacks are denied", async () => {
+    const { store, telegram, appConfig } = await fixture();
+    const notifier = (await TelegramNotifier.create(appConfig, store, telegram.fetcher))!;
+
+    const ownerCallback: TelegramUpdate = {
+      update_id: 5,
+      callback_query: {
+        id: "cb-owner-1",
+        from: { id: 123456789, is_bot: false, first_name: "Owner", username: "bromoketone" },
+        chat_instance: "chat-1",
+        data: "cmd:ping",
+        message: {
+          message_id: 501,
+          chat: { id: "123456789", type: "private" },
+          date: Math.floor(Date.now() / 1000),
+        },
+      },
+    };
+    expect(await notifier.processCallbackQuery(ownerCallback, { store })).toBe("acknowledged");
+    const ownerMessage = telegram.calls.find((call) => call.method === "sendMessage");
+    expect(ownerMessage).toBeDefined();
+    expect(sendBody(ownerMessage?.body).text).toContain("Pong!");
+    expect(telegram.calls.some((call) => call.method === "answerCallbackQuery")).toBe(true);
+
+    const intruderCallback: TelegramUpdate = {
+      update_id: 6,
+      callback_query: {
+        id: "cb-intruder-1",
+        from: { id: 987654321, is_bot: false, first_name: "Hacker", username: "hacker_dude" },
+        chat_instance: "chat-2",
+        data: "cmd:balance",
+        message: {
+          message_id: 502,
+          chat: { id: "987654321", type: "private" },
+          date: Math.floor(Date.now() / 1000),
+        },
+      },
+    };
+    expect(await notifier.processCallbackQuery(intruderCallback, { store })).toBe("acknowledged");
+    const denial = telegram.calls.filter(
+      (call) => call.method === "answerCallbackQuery" && JSON.stringify(call.body).includes("not for you"),
+    );
+    expect(denial.length).toBeGreaterThanOrEqual(1);
+    const strangerMessages = telegram.calls.filter(
+      (call) => call.method === "sendMessage" && sendBody(call.body).chat_id === "987654321",
+    );
+    expect(strangerMessages).toHaveLength(0);
   });
 });

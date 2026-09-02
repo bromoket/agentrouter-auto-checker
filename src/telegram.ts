@@ -158,9 +158,18 @@ export interface TelegramMessage {
   text?: string;
 }
 
+export interface TelegramCallbackQuery {
+  id: string;
+  from?: TelegramUser;
+  chat_instance?: string;
+  message?: TelegramMessage;
+  data?: string;
+}
+
 export interface TelegramUpdate {
   update_id: number;
   message?: TelegramMessage;
+  callback_query?: TelegramCallbackQuery;
 }
 
 export interface TelegramCommandContext {
@@ -168,6 +177,49 @@ export interface TelegramCommandContext {
   accounts?: AccountStore;
   observatoryStore?: ObservatoryStore | null;
   observatoryCoordinator?: ObservatoryCoordinator | null;
+  dashboardApiKey?: string;
+}
+
+export interface TelegramMenuButton {
+  text: string;
+  callback_data: string;
+}
+
+export interface TelegramMenuMarkup {
+  inline_keyboard: TelegramMenuButton[][];
+}
+
+export const COMMAND_MENU: ReadonlyArray<readonly [string, string]> = [
+  ["📊 Status", "cmd:status"],
+  ["🤖 Quotas", "cmd:quotas"],
+  ["💰 Balances", "cmd:balance"],
+  ["🌐 Dashboard", "cmd:dashboard"],
+  ["🔑 API key", "cmd:key"],
+  ["❓ Help", "cmd:help"],
+];
+
+export function commandMenuMarkup(): TelegramMenuMarkup {
+  const keyboard: TelegramMenuButton[][] = [];
+  for (let index = 0; index < COMMAND_MENU.length; index += 2) {
+    keyboard.push(
+      COMMAND_MENU.slice(index, index + 2).map(([text, callbackData]) => ({
+        text,
+        callback_data: callbackData,
+      })),
+    );
+  }
+  return { inline_keyboard: keyboard };
+}
+
+export function buildStrangerTaunt(username: string | undefined): string {
+  const handle = username ? ` @${escapeHtml(username)}` : "";
+  return [
+    `🖕 <b>Wrong door, pal${handle}.</b>`,
+    ``,
+    `This bot is <b>owner-only</b> — one operator, no guests. No status, no balances, no keys, no <i>nada</i>.`,
+    ``,
+    `<i>Touch grass. Come back when you own a fleet. 😏</i>`,
+  ].join("\n");
 }
 
 export interface UnifiedAccountSnapshot {
@@ -793,15 +845,39 @@ class TelegramTransport {
     }
   }
 
-  async sendMessage(html: string): Promise<{ messageId?: string }> {
-    const res = await this.request("sendMessage", {
-      chat_id: this.config.chatId,
+  async sendMessage(html: string, replyMarkup?: unknown): Promise<{ messageId?: string }> {
+    const chatId = this.config.chatId;
+    if (!chatId) {
+      throw new Error("Telegram chat id is not configured.");
+    }
+    return this.sendMessageTo(chatId, html, replyMarkup);
+  }
+
+  async sendMessageTo(
+    chatId: string,
+    html: string,
+    replyMarkup?: unknown,
+  ): Promise<{ messageId?: string }> {
+    const body: Record<string, unknown> = {
+      chat_id: chatId,
       text: html,
       parse_mode: "HTML",
       link_preview_options: { is_disabled: true },
-    });
+    };
+    if (replyMarkup !== undefined) {
+      body.reply_markup = replyMarkup;
+    }
+    const res = await this.request("sendMessage", body);
     const msgId = (res.result as { message_id?: number | string } | undefined)?.message_id;
     return { messageId: msgId ? String(msgId) : undefined };
+  }
+
+  async answerCallbackQuery(callbackQueryId: string, text?: string): Promise<void> {
+    const body: Record<string, unknown> = { callback_query_id: callbackQueryId };
+    if (text !== undefined) {
+      body.text = text;
+    }
+    await this.request("answerCallbackQuery", body);
   }
 
   async sendPhoto(photo: Uint8Array, caption: string): Promise<void> {
@@ -838,7 +914,7 @@ class TelegramTransport {
           body: JSON.stringify({
             offset,
             timeout: timeoutSeconds,
-            allowed_updates: ["message"],
+            allowed_updates: ["message", "callback_query"],
           }),
           signal: controller.signal,
         },
@@ -873,7 +949,7 @@ class TelegramTransport {
   }
 
   private async request(
-    method: "getChat" | "sendMessage" | "sendPhoto",
+    method: "getChat" | "sendMessage" | "sendPhoto" | "answerCallbackQuery",
     body: object | FormData,
   ): Promise<TelegramApiResponse> {
     for (let attempt = 1; attempt <= 3; attempt += 1) {
@@ -1270,13 +1346,17 @@ export class TelegramNotifier {
   }
 
   private async sendRich(accountId: string, label: string, html: string): Promise<void> {
+    const menuHint = "🕹️ Reply /menu for live controls.";
+    const withHint = html.length + menuHint.length + 3 < 1_000
+      ? `${html}\n\n${menuHint}`
+      : html;
     if (!this.config.telegram.graphsEnabled) {
-      await this.transport.sendMessage(html);
+      await this.transport.sendMessage(withHint);
       return;
     }
     try {
       const chart = await this.renderChart(accountId, label);
-      await this.transport.sendPhoto(chart, html);
+      await this.transport.sendPhoto(chart, withHint);
     } catch (error) {
       console.error(`Telegram graph unavailable; sending text only: ${
         error instanceof Error ? error.message : String(error)
@@ -1408,34 +1488,79 @@ export class TelegramNotifier {
 
     const chatId = String(message.chat.id);
     const username = message.from?.username?.toLowerCase() || "";
+    const command = message.text.trim().split(/\s+/)[0].toLowerCase().split("@")[0];
 
-    // Verify caller identity strictly
-    if (
-      chatId !== this.config.telegram.chatId ||
-      (this.config.telegram.allowedUsername && username !== this.config.telegram.allowedUsername)
-    ) {
+    // Verify caller identity strictly. Anyone else who pings the bot gets a
+    // one-way taunt (no data ever leaves the owner chat) and nothing else.
+    const authorized =
+      chatId === this.config.telegram.chatId &&
+      (!this.config.telegram.allowedUsername || username === this.config.telegram.allowedUsername);
+    if (!authorized) {
+      if (
+        command.startsWith("/") &&
+        message.chat.type === "private" &&
+        message.chat.id !== undefined
+      ) {
+        try {
+          await this.transport.sendMessageTo(
+            String(message.chat.id),
+            buildStrangerTaunt(username || undefined),
+          );
+        } catch (error) {
+          console.error(
+            `Telegram stranger taunt failed: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+      }
       return "ignored";
     }
 
-    const command = message.text.trim().split(/\s+/)[0].toLowerCase().split("@")[0];
     if (!command.startsWith("/")) return "ignored";
 
     try {
-      if (command === "/start" || command === "/help") {
+      if (command === "/menu" || command === "/start" || command === "/help") {
+        const help = buildHelpMessage(
+          this.config.telegram.allowedUsername || "owner",
+          this.config.telegram.dashboardUrl,
+        );
         await this.transport.sendMessage(
-          buildHelpMessage(this.config.telegram.allowedUsername || "owner", this.config.telegram.dashboardUrl),
+          command === "/menu" ? "🕹️ <b>Observatory controls</b>" : help,
+          commandMenuMarkup(),
         );
         return "acknowledged";
       }
 
       if (command === "/dashboard" || command === "/link") {
-        await this.transport.sendMessage(buildDashboardMessage(this.config.telegram.dashboardUrl));
+        await this.transport.sendMessage(
+          buildDashboardMessage(this.config.telegram.dashboardUrl),
+          commandMenuMarkup(),
+        );
         return "acknowledged";
       }
 
       if (command === "/ping") {
         await this.transport.sendMessage(
           `🏓 <b>Pong!</b> Fleet Observatory operational.\n⏱ Uptime: ${Math.floor(process.uptime())}s`,
+          commandMenuMarkup(),
+        );
+        return "acknowledged";
+      }
+
+      if (command === "/key") {
+        const apiKey = context.dashboardApiKey?.trim();
+        if (!apiKey) {
+          await this.transport.sendMessage(
+            "🔑 The dashboard API key is not available to this process.\n\n" +
+              "Set <code>DASHBOARD_API_KEY</code> in the service environment and restart.",
+            commandMenuMarkup(),
+          );
+          return "acknowledged";
+        }
+        const boundedKey = escapeTelegramText(apiKey, 160);
+        await this.transport.sendMessage(
+          "🔑 <b>Dashboard API key</b>\n\n<code>" + boundedKey + "</code>\n\n" +
+            "Use it at the Observatory sign-in page. It is only ever sent here, to you, and never logged.",
+          commandMenuMarkup(),
         );
         return "acknowledged";
       }
@@ -1451,8 +1576,11 @@ export class TelegramNotifier {
           totalConsumed,
           dashboardUrl: this.config.telegram.dashboardUrl,
         });
-        for (const page of pages) {
-          await this.transport.sendMessage(page);
+        for (const [pageIndex, page] of pages.entries()) {
+          await this.transport.sendMessage(
+            page,
+            pageIndex === pages.length - 1 ? commandMenuMarkup() : undefined,
+          );
         }
         return "acknowledged";
       }
@@ -1489,8 +1617,11 @@ export class TelegramNotifier {
           quotas: quotasData,
           dashboardUrl: this.config.telegram.dashboardUrl,
         });
-        for (const messagePage of messages) {
-          await this.transport.sendMessage(messagePage);
+        for (const [messageIndex, messagePage] of messages.entries()) {
+          await this.transport.sendMessage(
+            messagePage,
+            messageIndex === messages.length - 1 ? commandMenuMarkup() : undefined,
+          );
         }
         return "acknowledged";
       }
@@ -1539,15 +1670,19 @@ export class TelegramNotifier {
           openAiWindows,
           dashboardUrl: this.config.telegram.dashboardUrl,
         });
-        for (const page of pages) {
-          await this.transport.sendMessage(page);
+        for (const [pageIndex, page] of pages.entries()) {
+          await this.transport.sendMessage(
+            page,
+            pageIndex === pages.length - 1 ? commandMenuMarkup() : undefined,
+          );
         }
         return "acknowledged";
       }
 
       const safeCommand = escapeTelegramText(command.slice(0, 64), 64);
       await this.transport.sendMessage(
-        `❓ Unknown command <code>${safeCommand}</code>.\n\nAvailable commands:\n/status — Fleet overview\n/quotas — Provider quotas\n/balance — AgentRouter balances\n/dashboard — Dashboard link\n/help — Command list`,
+        `❓ Unknown command <code>${safeCommand}</code>.\n\nAvailable commands:\n/menu — Button controls\n/status — Fleet overview\n/quotas — Provider quotas\n/balance — AgentRouter balances\n/dashboard — Dashboard link\n/key — Dashboard API key\n/help — Command list`,
+        commandMenuMarkup(),
       );
       return "acknowledged";
     } catch (error) {
@@ -1556,6 +1691,53 @@ export class TelegramNotifier {
       );
       return "retryable_failure";
     }
+  }
+
+  async processCallbackQuery(
+    update: TelegramUpdate,
+    context: TelegramCommandContext,
+  ): Promise<CommandUpdateOutcome> {
+    const callback = update.callback_query;
+    if (!callback || typeof callback.data !== "string" || !callback.from) {
+      return "ignored";
+    }
+    const chat = callback.message?.chat;
+    const chatId = chat ? String(chat.id) : null;
+    const username = callback.from.username?.toLowerCase() || "";
+    const authorized =
+      chatId === this.config.telegram.chatId &&
+      (!this.config.telegram.allowedUsername || username === this.config.telegram.allowedUsername);
+    if (!authorized) {
+      await this.transport.answerCallbackQuery(
+        callback.id,
+        "🖕 Private bot — not for you.",
+      ).catch(() => undefined);
+      return "acknowledged";
+    }
+    if (!callback.data.startsWith("cmd:")) {
+      await this.transport.answerCallbackQuery(callback.id, "Unknown action.").catch(() => undefined);
+      return "acknowledged";
+    }
+    const message = callback.message;
+    if (!message) {
+      await this.transport.answerCallbackQuery(callback.id, "Old message; send /menu again.").catch(() => undefined);
+      return "acknowledged";
+    }
+    const synthesized: TelegramUpdate = {
+      update_id: update.update_id,
+      message: {
+        ...message,
+        from: callback.from,
+        text: `/${callback.data.slice(4).replace(/[^a-z0-9_/-]/gi, "").toLowerCase()}`,
+      },
+    };
+    const outcome = await this.processCommandUpdate(synthesized, context);
+    if (outcome === "acknowledged") {
+      await this.transport.answerCallbackQuery(callback.id).catch(() => undefined);
+    } else if (outcome === "retryable_failure") {
+      await this.transport.answerCallbackQuery(callback.id, "Busy — try again in a moment.").catch(() => undefined);
+    }
+    return outcome;
   }
 
   /**
@@ -1580,7 +1762,9 @@ export class TelegramNotifier {
 
           for (const update of updates) {
             if (abortController.signal.aborted) break;
-            const outcome = await this.processCommandUpdate(update, context);
+            const outcome = update.callback_query
+              ? await this.processCallbackQuery(update, context)
+              : await this.processCommandUpdate(update, context);
             if (outcome === "retryable_failure") {
               // Retryable failure: do not advance offset past failed update;
               // stop processing this batch and back off before re-fetching
