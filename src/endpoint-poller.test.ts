@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { AGENTROUTER_SESSION_DEAD_MARKER } from "./agentrouter-session";
 import { hasMonitorSession, pollAccountEndpoints } from "./endpoint-poller";
 import type { GitHubAccount } from "./accounts";
 import type { AppConfig } from "./config";
@@ -64,5 +65,39 @@ describe("pollAccountEndpoints", () => {
     const result = await pollAccountEndpoints(account, await configWithMonitorState());
     expect(result.status).toBe("error");
     expect(result.errorMessage).toContain("HTTP 403");
+  });
+
+  it("falls back to a browser read session when direct polling hits WAF HTML", async () => {
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      const path = new URL(String(input)).pathname;
+      return path.endsWith("/api/user/self")
+        ? new Response("<html>challenge</html>", {
+            status: 200,
+            headers: { "content-type": "text/html; charset=utf-8" },
+          })
+        : Response.json({ success: true, data: { quota_per_unit: 500_000 } });
+    }) as unknown as typeof fetch;
+    const readSession = async () => ({
+      success: true,
+      data: { quota: -115_000, used_quota: 69_975_000 },
+    });
+    const result = await pollAccountEndpoints(account, await configWithMonitorState(), undefined, readSession);
+    expect(result.status).toBe("ok");
+    expect(result.balance).toBe(-0.23);
+    expect(result.consumed).toBe(139.95);
+    expect(result.sourcePath).toContain(":browser");
+  });
+
+  it("classifies an unauthenticated browser session with the session-dead marker", async () => {
+    globalThis.fetch = (async () => new Response("<html>challenge</html>", {
+      status: 200,
+      headers: { "content-type": "text/html; charset=utf-8" },
+    })) as unknown as typeof fetch;
+    const readSession = async () => {
+      throw new Error(AGENTROUTER_SESSION_DEAD_MARKER);
+    };
+    const result = await pollAccountEndpoints(account, await configWithMonitorState(), undefined, readSession);
+    expect(result.status).toBe("error");
+    expect(result.errorMessage).toContain(AGENTROUTER_SESSION_DEAD_MARKER);
   });
 });

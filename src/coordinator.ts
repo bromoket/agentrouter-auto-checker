@@ -10,6 +10,11 @@ import { SettingsStore } from "./settings";
 import type { RunSnapshot } from "./storage";
 import { Store } from "./storage";
 import type { TelegramNotifier } from "./telegram";
+import {
+  AGENTROUTER_SESSION_DEAD_MARKER,
+  DefaultAgentRouterReadSessions,
+  type AgentRouterReadSessions,
+} from "./agentrouter-session";
 import { hasMonitorSession, pollAccountEndpoints } from "./endpoint-poller";
 import { OmpQuotaPoller } from "./omp-quota";
 export interface CoordinatorStatus {
@@ -91,6 +96,8 @@ export class CheckCoordinator {
   private ompQuotaPollerStarted = false;
   private readonly ompQuotaPoller: OmpQuotaPoller | null = null;
   private activeAbortController: AbortController | null = null;
+  private readonly readSessions: AgentRouterReadSessions;
+  private readonly lastSessionHealAt = new Map<string, number>();
 
   constructor(
     private readonly store: Store,
@@ -101,7 +108,9 @@ export class CheckCoordinator {
     private readonly telegram: TelegramNotifier | null = null,
     ompQuotaPoller: OmpQuotaPoller | null = null,
     private readonly observatoryCoordinator: ObservatoryCoordinator | null = null,
+    readSessions?: AgentRouterReadSessions | null,
   ) {
+    this.readSessions = readSessions ?? new DefaultAgentRouterReadSessions();
     if (ompQuotaPoller) {
       this.ompQuotaPoller = ompQuotaPoller;
     } else if (config.ompQuota?.enabled) {
@@ -170,6 +179,7 @@ export class CheckCoordinator {
     this.status.schedulerActive = false;
     this.status.nextScheduledRunAt = null;
     this.observatoryCoordinator?.stop();
+    void this.readSessions.close();
   }
 
 
@@ -207,17 +217,20 @@ export class CheckCoordinator {
           continue;
         }
         if (Date.now() >= nextPollAt) {
-          const accounts = (await this.accounts.load()).filter(
-            (account) => account.enabled && Boolean(account.agentRouterApiToken),
-          );
+          const accounts = (await this.accounts.load()).filter((account) => account.enabled);
           for (const account of accounts) {
             if (!await hasMonitorSession(account, this.config)) {
-              // The first browser cycle creates this short-lived, private
-              // session snapshot. Until then there is nothing read-only to
-              // poll, and an error observation would be misleading.
+              // The first browser cycle creates this private session snapshot.
+              // Until then there is nothing read-only to poll, and an error
+              // observation would be misleading.
               continue;
             }
-            const observation = await pollAccountEndpoints(account, this.config);
+            const observation = await pollAccountEndpoints(
+              account,
+              this.config,
+              undefined,
+              (pollAccount, pollConfig) => this.readSessions.poll(pollAccount, pollConfig),
+            );
             const observationId = this.store.saveEndpointObservation(observation);
             if (this.observatoryCoordinator) {
               this.observatoryCoordinator.recordAgentRouterEndpointObservation({
@@ -240,6 +253,9 @@ export class CheckCoordinator {
             }
             if (observation.status === "error") {
               console.warn(`[endpoint-poll:${account.label}] ${observation.errorMessage}`);
+              if (observation.errorMessage?.includes(AGENTROUTER_SESSION_DEAD_MARKER)) {
+                void this.healAgentRouterSession(account);
+              }
             }
           }
           nextPollAt = Date.now() + settings.endpointPollIntervalMinutes * 60_000;
@@ -249,6 +265,29 @@ export class CheckCoordinator {
         nextPollAt = Date.now() + 60_000;
       }
       await delay(1_000);
+    }
+  }
+
+  private async healAgentRouterSession(account: GitHubAccount): Promise<void> {
+    if (this.status.running || this.status.cancellationRequested) {
+      return;
+    }
+    const lastAttempt = this.lastSessionHealAt.get(account.id) ?? 0;
+    if (Date.now() - lastAttempt < 10 * 60_000) {
+      return;
+    }
+    this.lastSessionHealAt.set(account.id, Date.now());
+    console.log(
+      `[session-heal:${account.label}] read session expired; running an immediate browser cycle to restore minute polling.`,
+    );
+    try {
+      await this.runCycle(account.id);
+    } catch (error) {
+      console.error(
+        `[session-heal:${account.label}] recovery cycle failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
     }
   }
 

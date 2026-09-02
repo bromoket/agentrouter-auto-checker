@@ -1550,6 +1550,7 @@ async function runWorker({ account, config }) {
   let launchAttempts = 0;
   let activePage;
   let authenticatedUserId;
+  let preflightLoggedOut = false;
   if (config.captureScreenshots) {
     if (process.platform === "win32") {
       log(`[${account.label}] screenshots are unsupported on Windows; skipping`);
@@ -1636,6 +1637,7 @@ async function runWorker({ account, config }) {
       if (!staleLogout) {
         throw new Error("Unable to clear the stale AgentRouter session before login.");
       }
+      preflightLoggedOut = true;
       await activePage.goto(`${config.baseUrl}/login`, {
         waitUntil: "domcontentloaded",
         timeout: config.requestTimeoutMs,
@@ -1767,25 +1769,22 @@ async function runWorker({ account, config }) {
 
     await persistAgentRouterState(context, monitorStatePath, config.baseUrl);
 
-    progress("logging-out", "Token and minute-poll session captured. Verifying AgentRouter logout.", 92);
-    result.loggedOut = await logoutAndPersist(
-      context,
-      activePage,
-      config,
-      authenticatedUserId,
-      statePath,
-      result.apiCalls,
-    );
-    if (!result.loggedOut) {
-      throw new Error("AgentRouter's visible Quit flow did not confirm logout.");
-    }
-
     const failedCall = result.apiCalls.find((call) => !call.ok && !call.recovered);
     if (failedCall) {
       throw new Error(`AgentRouter UI step failed: ${failedCall.path} returned ${failedCall.status}.`);
     }
-    log(`[${account.label}] data saved and AgentRouter logout confirmed`);
-    progress("complete", "Snapshot saved and AgentRouter logout confirmed through Quit.", 100);
+    result.loggedOut = preflightLoggedOut;
+    log(
+      `[${account.label}] data saved and authenticated minute-poll session retained` +
+      (preflightLoggedOut ? " (prior session logged out)" : ""),
+    );
+    progress(
+      "complete",
+      preflightLoggedOut
+        ? "Snapshot saved. Prior session logged out; the fresh authenticated session now feeds minute polling."
+        : "Snapshot saved. Authenticated session retained to feed minute polling.",
+      100,
+    );
   } catch (error) {
     result.status = "error";
     result.errorMessage = errorText(error);

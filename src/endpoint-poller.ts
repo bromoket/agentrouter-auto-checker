@@ -2,6 +2,7 @@ import { access, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { GitHubAccount } from "./accounts";
 import type { AppConfig } from "./config";
+import { AGENTROUTER_SESSION_DEAD_MARKER, isSessionDeadError } from "./agentrouter-session";
 import type { EndpointObservation } from "./storage";
 
 interface StorageStateCookie {
@@ -86,10 +87,15 @@ export async function hasMonitorSession(account: GitHubAccount, config: AppConfi
   }
 }
 
+export interface ReadSessionFallback {
+  (account: GitHubAccount, config: AppConfig): Promise<unknown>;
+}
+
 export async function pollAccountEndpoints(
   account: GitHubAccount,
   config: AppConfig,
   signal?: AbortSignal,
+  readSession?: ReadSessionFallback,
 ): Promise<EndpointObservation> {
   const startedAt = Date.now();
   try {
@@ -113,11 +119,27 @@ export async function pollAccountEndpoints(
         signal: combinedSignal,
       });
       const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
-      if (!response.ok || !contentType.includes("application/json")) {
+      let payload: unknown;
+      let sourcePath: string = path;
+      if (response.ok && contentType.includes("application/json")) {
+        payload = await response.json();
+      } else if (readSession) {
+        lastError = `${path} returned HTTP ${response.status} (${contentType || "unknown content type"}).`;
+        try {
+          payload = await readSession(account, config);
+          sourcePath = `${path}:browser`;
+        } catch (error) {
+          if (isSessionDeadError(error)) {
+            lastError = AGENTROUTER_SESSION_DEAD_MARKER;
+          } else {
+            lastError = `Browser read session failed: ${error instanceof Error ? error.message : String(error)}`;
+          }
+          continue;
+        }
+      } else {
         lastError = `${path} returned HTTP ${response.status} (${contentType || "unknown content type"}).`;
         continue;
       }
-      const payload: unknown = await response.json();
       let quotaPerUnit = findNumber(payload, ["quota_per_unit", "quotaPerUnit"]);
       if (quotaPerUnit === undefined) {
         const statusResponse = await fetch(new URL("/api/status", config.baseUrl), {
@@ -152,7 +174,7 @@ export async function pollAccountEndpoints(
         balance,
         consumed,
         requestCount: findNumber(payload, ["request_count", "requestCount", "count"]),
-        sourcePath: path,
+        sourcePath,
         latencyMs: Date.now() - startedAt,
       };
     }
