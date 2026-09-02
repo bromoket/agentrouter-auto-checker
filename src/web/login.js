@@ -16,18 +16,34 @@
 
   if (!form || !keyInput || !submitBtn || !errorDiv) return;
 
+  function showError(message) {
+    errorDiv.textContent = message;
+    errorDiv.classList.remove("shake");
+    void errorDiv.offsetWidth;
+    errorDiv.classList.add("shake");
+  }
+
+  function clearError() {
+    errorDiv.textContent = "";
+    errorDiv.classList.remove("shake");
+  }
+
+  keyInput.addEventListener("input", clearError);
+
   form.addEventListener("submit", async function (e) {
     e.preventDefault();
-    errorDiv.textContent = "";
+    clearError();
     const apiKey = keyInput.value.trim();
-    keyInput.value = "";
 
     if (!apiKey) {
-      errorDiv.textContent = "API key is required.";
+      showError("API key is required.");
+      keyInput.focus();
       return;
     }
 
     submitBtn.disabled = true;
+    const originalLabel = submitBtn.textContent;
+    submitBtn.textContent = "Signing in…";
     try {
       const res = await fetch(dashboardUrl("api/auth/session"), {
         method: "POST",
@@ -45,11 +61,13 @@
       const data = await res.json().catch(function () {
         return {};
       });
-      errorDiv.textContent = data.error || "Authentication failed.";
+      showError(data.error || "Authentication failed.");
+      keyInput.focus();
     } catch (err) {
-      errorDiv.textContent = "Network error. Please try again.";
+      showError("Network error. Please try again.");
     } finally {
       submitBtn.disabled = false;
+      submitBtn.textContent = originalLabel;
     }
   });
 })();
