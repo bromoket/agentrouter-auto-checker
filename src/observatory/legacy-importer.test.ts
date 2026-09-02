@@ -38,7 +38,9 @@ async function sha256(path: string): Promise<string> {
 }
 
 // Windows releases sqlite file handles asynchronously after close; there is no
-// event to await, so bounded real backoff is the only reliable cleanup signal.
+// event to await, so bounded real backoff is the only cleanup signal. Temp
+// cleanup is best-effort: suite parallelism can hold a handle past the retries,
+// and a leaked temp dir must never fail the run.
 async function removePathWithRetry(path: string, recursive = false): Promise<void> {
   const attempts = process.platform === "win32" ? 10 : 1;
   let lastError: unknown;
@@ -54,6 +56,7 @@ async function removePathWithRetry(path: string, recursive = false): Promise<voi
       }
     }
   }
+  if (process.platform === "win32") return;
   throw lastError;
 }
 
