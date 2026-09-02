@@ -37,8 +37,10 @@ async function sha256(path: string): Promise<string> {
   return createHash("sha256").update(new Uint8Array(bytes)).digest("hex");
 }
 
+// Windows releases sqlite file handles asynchronously after close; there is no
+// event to await, so bounded real backoff is the only reliable cleanup signal.
 async function removePathWithRetry(path: string, recursive = false): Promise<void> {
-  const attempts = process.platform === "win32" ? 8 : 1;
+  const attempts = process.platform === "win32" ? 10 : 1;
   let lastError: unknown;
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     try {
@@ -47,7 +49,9 @@ async function removePathWithRetry(path: string, recursive = false): Promise<voi
     } catch (error) {
       lastError = error;
       Bun.gc(true);
-      if (attempt + 1 < attempts) await Promise.resolve();
+      if (attempt + 1 < attempts) {
+        await Bun.sleep(25 * (attempt + 1));
+      }
     }
   }
   throw lastError;
