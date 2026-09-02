@@ -1774,6 +1774,7 @@ async function runWorker({ account, config }) {
       throw new Error(`AgentRouter UI step failed: ${failedCall.path} returned ${failedCall.status}.`);
     }
     result.loggedOut = preflightLoggedOut;
+    result.summary.authentication = "retained-authenticated-session";
     log(
       `[${account.label}] data saved and authenticated minute-poll session retained` +
       (preflightLoggedOut ? " (prior session logged out)" : ""),
