@@ -530,13 +530,15 @@ describe("ObservatoryStore V1 Comprehensive Suite", () => {
 
   test("nonce atomic claim with strict TTL and server time comparison", () => {
     const store = new ObservatoryStore(":memory:");
+    const claimedAt = new Date(Date.now() + 2 * 60_000).toISOString();
+    const expiresAt = new Date(Date.now() + 12 * 60_000).toISOString();
 
     const claim1 = store.claimNonce({
       nonce: "nonce-atomic-1001",
       scope: "quota-ingest",
       hostId: "host-1",
-      claimedAt: "2026-09-01T18:00:00.000Z",
-      expiresAt: "2026-09-01T18:10:00.000Z",
+      claimedAt,
+      expiresAt,
     });
     expect(claim1.claimed).toBe(true);
 
@@ -545,8 +547,8 @@ describe("ObservatoryStore V1 Comprehensive Suite", () => {
       nonce: "nonce-atomic-1001",
       scope: "quota-ingest",
       hostId: "host-1",
-      claimedAt: "2026-09-01T18:05:00.000Z",
-      expiresAt: "2026-09-01T18:15:00.000Z",
+      claimedAt: new Date(Date.now() + 7 * 60_000).toISOString(),
+      expiresAt: new Date(Date.now() + 17 * 60_000).toISOString(),
     });
     expect(claim2.claimed).toBe(false);
 
@@ -555,8 +557,8 @@ describe("ObservatoryStore V1 Comprehensive Suite", () => {
       store.claimNonce({
         nonce: "nonce-bad-ttl",
         scope: "quota-ingest",
-        claimedAt: "2026-09-01T18:10:00.000Z",
-        expiresAt: "2026-09-01T18:05:00.000Z",
+        claimedAt: new Date(Date.now() + 10 * 60_000).toISOString(),
+        expiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
       });
     }).toThrow(ValidationError);
 
