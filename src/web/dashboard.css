@@ -557,7 +557,8 @@ td.meta-cell { white-space: normal; min-width: 180px; }
 .hero h1 { margin: 0; }
 .hero h1 { font-size: clamp(21px, 2vw, 30px); line-height: 1.02; }
 .hero-copy > p:not(.eyebrow) { max-width: 540px; font-size: 12.5px; line-height: 1.5; margin-top: 6px; }
-.hero-actions { margin-top: 12px; }
+.hero-actions { margin-top: 10px; }
+.hero .button.large { min-height: 38px; padding-inline: 16px; border-radius: 12px; }
 .hero-visual { transform: scale(0.52); }
 .core { width: 64px; height: 64px; }
 .core span { font-size: 19px; }
