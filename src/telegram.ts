@@ -486,8 +486,8 @@ export function buildStatusMessages(params: {
     page += `• <i>No active accounts configured</i>\n`;
   } else {
     for (const acc of params.agentrouterAccounts) {
-      const bal = acc.balance !== null ? `$${acc.balance.toFixed(2)}` : "—";
-      const usage = acc.consumed !== null ? `$${acc.consumed.toFixed(2)}` : "—";
+      const bal = acc.balance !== null ? money(acc.balance) : "—";
+      const usage = acc.consumed !== null ? money(acc.consumed) : "—";
       const reqs = acc.requestCount !== null ? acc.requestCount.toLocaleString() : "—";
       const dot = acc.status === "ok" ? "🟢" : "🔴";
       const safeLabel = escapeTelegramText(acc.label, 96);
@@ -502,7 +502,7 @@ export function buildStatusMessages(params: {
     }
   }
 
-  const totals = `💰 <b>Total Balance:</b> <b>$${params.totalBalance.toFixed(2)}</b> (Usage: $${params.totalConsumed.toFixed(2)})\n\n`;
+  const totals = `💰 <b>Total Balance:</b> <b>${money(params.totalBalance)}</b> (Usage: ${money(params.totalConsumed)})\n\n`;
 
   if (page.length + totals.length + quotaBlock.length + footer.length > maxPageLength) {
     pages.push(`${page.trimEnd()}${footer}`);
@@ -652,7 +652,7 @@ export function buildBalancesMessages(params: {
   const header = `💰 <b>AgentRouter Portfolio Balances</b>\n\n`;
   const continuedHeader = `💰 <b>AgentRouter Portfolio Balances · continued</b>\n\n`;
 
-  const summary = `💵 <b>Combined Fleet Balance:</b> <b>$${params.totalBalance.toFixed(2)}</b>\n📈 <b>Total Fleet Usage:</b> $${params.totalConsumed.toFixed(2)}`;
+  const summary = `💵 <b>Combined Fleet Balance:</b> <b>${money(params.totalBalance)}</b>\n📈 <b>Total Fleet Usage:</b> ${money(params.totalConsumed)}`;
 
   if (params.accounts.length === 0) {
     const page = `${header}<i>No active AgentRouter accounts configured.</i>\n\n${summary}${footer}`;
@@ -664,8 +664,8 @@ export function buildBalancesMessages(params: {
 
   for (let idx = 0; idx < params.accounts.length; idx++) {
     const acc = params.accounts[idx];
-    const bal = acc.balance !== null ? `$${acc.balance.toFixed(2)}` : "—";
-    const usage = acc.consumed !== null ? `$${acc.consumed.toFixed(2)}` : "—";
+    const bal = acc.balance !== null ? money(acc.balance) : "—";
+    const usage = acc.consumed !== null ? money(acc.consumed) : "—";
     const reqs = acc.requestCount !== null ? acc.requestCount.toLocaleString() : "—";
     const dot = acc.status === "ok" ? "🟢" : "🔴";
     const grantStatus = acc.dailyGrantConfirmed

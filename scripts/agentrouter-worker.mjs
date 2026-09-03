@@ -1142,15 +1142,23 @@ async function openUiRoute(page, config, route, apiCalls, message) {
 async function readUiMetricsWithRefresh(page, config, route, parse, apiCalls, label) {
   let metrics = {};
   const samples = [];
-  for (let attempt = 0; attempt < 3; attempt += 1) {
+  const maxAttempts = 4;
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     throwIfCancelled();
     await openUiRoute(
       page,
       config,
       route,
       apiCalls,
-      attempt > 0 ? `${label} still showed $0.00 for both money cards; refreshed it (${attempt + 1}/3).` : undefined,
+      attempt > 0
+        ? `${label} still showed $0.00 for both money cards; refreshed it (${attempt + 1}/${maxAttempts}).`
+        : undefined,
     );
+    // AgentRouter renders money cards after client hydration: the first paint almost always
+    // shows $0.00. Wait for the SPA to settle before reading, otherwise every sample (including
+    // post-refresh ones) catches the pre-hydration placeholder. Never parse the first paint.
+    await page.waitForLoadState("networkidle").catch(() => undefined);
+    await page.waitForTimeout(1500);
     const mainText = await page.locator("main").innerText();
     metrics = parse(mainText);
     samples.push({
@@ -1163,7 +1171,7 @@ async function readUiMetricsWithRefresh(page, config, route, parse, apiCalls, la
       return { metrics, samples, refreshCount: attempt };
     }
   }
-  return { metrics, samples, refreshCount: 2 };
+  return { metrics, samples, refreshCount: maxAttempts - 1 };
 }
 
 async function readTopLevelJson(page) {
@@ -1734,17 +1742,17 @@ async function runWorker({ account, config }) {
       consoleMetrics.statisticalCount,
       consoleMetrics.statisticalTokens,
     ].some((value) => Number.isFinite(value) && value > 0);
-    if (
-      walletMoneyValid && walletMetrics.balance === 0 && walletMetrics.consumed === 0 &&
-      consoleMoneyValid && consoleMetrics.balance === 0 && consoleMetrics.consumed === 0 &&
-      hasVisibleActivity
-    ) {
-      throw new Error(
-        "AgentRouter still showed $0.00 for both balance and consumption after three visible page refreshes; refusing to save false money values.",
-      );
-    }
     const walletHasRealMoney = walletMoneyValid && !(walletMetrics.balance === 0 && walletMetrics.consumed === 0);
     const money = walletHasRealMoney ? walletMetrics : consoleMetrics;
+    if (
+      hasVisibleActivity &&
+      Number.isFinite(money.balance) && money.balance === 0 &&
+      Number.isFinite(money.consumed) && money.consumed === 0
+    ) {
+      throw new Error(
+        `AgentRouter still showed $0.00 for both balance and consumption on the selected money source after ${consoleReading.refreshCount + 1} settled page load(s) while usage cards show activity; refusing to save false money values.`,
+      );
+    }
     result.metrics = {
       siteUserId: authenticatedUserId,
       siteUsername: typeof authenticated.user?.username === "string"
