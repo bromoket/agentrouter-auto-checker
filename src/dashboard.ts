@@ -282,7 +282,6 @@ export function startDashboard(
         if (method === "GET" && url.pathname === "/live-kit.js") {
           return serveFile(join(WEB_ROOT, "live-kit.js"));
         }
-        }
 
         if (method === "GET" && url.pathname === "/api/bootstrap") {
           const accounts = await accountStore.listPublic();
