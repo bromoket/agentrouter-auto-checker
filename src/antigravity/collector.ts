@@ -25,7 +25,6 @@ import {
 } from "./aggregate";
 import {
   buildProbeHeaders,
-  errorCategoryFrom,
   fetchAvailableModels,
   loadCodeAssist,
   retrieveCliQuota,
@@ -244,10 +243,9 @@ export class AntigravityCollector {
         this.probeTimeoutMs,
         this.fetcher,
       );
-    } catch (error) {
-      const category = errorCategoryFrom(error);
-      if (category === "auth") throw error;
-      // CLI path is best-effort; quota pools still valid without it.
+    } catch {
+      // CLI path is best-effort; quota pools remain valid without it. A revoked token
+      // already surfaces via loadCodeAssist / IDE quota (401/403) above.
     }
 
     // 5. Catalog (throttled per account)

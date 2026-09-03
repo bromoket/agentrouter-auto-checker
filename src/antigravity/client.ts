@@ -427,9 +427,10 @@ export async function loadCodeAssist(
     endpoints,
     "v1internal:loadCodeAssist",
     { Authorization: `Bearer ${accessToken}`, ...headers },
-    // Live probing shows metadata.platform is a server enum that rejects "MACOS"/"WINDOWS";
-    // omitting it succeeds (platform still travels in the Client-Metadata header).
-    { metadata: { ideType: "ANTIGRAVITY", pluginType: "GEMINI" } },
+    // Live probing (2026-09): an empty body returns currentTier/paidTier/allowedTiers and
+    // cloudaicompanionProject. Any metadata.platform value is rejected by the server enum,
+    // and a metadata body without platform omits the project field.
+    {},
     timeoutMs,
     fetcher,
     parse,
