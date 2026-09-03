@@ -291,3 +291,28 @@ is resolved to `reset` for headers, `resets` never used in copy).
    owner chat; owner reviews on phone and desktop; screenshot both and attach to this spec's
    review record (design-review-plan doc).
 4. No message exceeds 4,096 raw chars post-HTML (assert in send path; log a warning otherwise).
+
+
+## 7. Review log + amendments (2026-09-03 · DesignReviewA)
+
+T1. **Alert data must exist on the event (P0).** Alerts are formatted from
+    `StoredObservatoryEvent` alone (`delivery.ts` has no store handle). Quota events must carry
+    point-in-time fields at emission (`events.ts`): `usedPct`, `newPct`, `resetsAt`, and for
+    credit events `credits`. Add an optional typed payload on the event candidate/model and
+    populate at the emitter (event payload snapshot, never a live store lookup at delivery).
+T2. **Quota window rows are stacked, not single-line (P0).** Per window: line 1 = dot + title +
+    source chip; line 2 = `<code>{bar12}</code> <b>{pct}%</b>` (≤ ~17 cells); line 3 (only when
+    the reset text would push past ~36 cells) = `   › {countdown}`. Simpler invariant: bar+pct
+    always alone on line 2; countdown always line 3 when present. No token may straddle a wrap.
+T3. **Alignment uses `<code>` table blocks (P1).** Numeric key-value blocks render as a single
+    `<code>` per row (≤ 40 cells) or stacked `Label:\n   value` rows; `&nbsp;` padding is
+    limited to ≤ 4 cells and never used for cross-column alignment in proportional text.
+T4. **Copy unification (P1).** Future tense is always `resets in N…`; past is always
+    `reset overdue …` with hours when < 24 h (`reset overdue Nh Nm`); header tense `reset`. The
+    copy table is the single authority; §3.2/§3.4 examples were normalized to it.
+T5. **Two-pass pagination (P1).** `splitPages` first chunks into section blocks, then computes
+    page count N, then renders `(i/N)` headers. Single-pass streaming is forbidden.
+T6. **Signatures (P1).** New pure builders keep backward-compatible entry points during cutover:
+    `buildStatusMessages`/`buildQuotasMessages` gain optional params (sources, canonical rows,
+    metric payload); old callers unchanged until route handlers migrate. Delivery test and
+    telegram test string assertions update in the same commit as the copy change.

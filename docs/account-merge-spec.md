@@ -232,3 +232,39 @@ Broker normalization envelope (`src/observatory/omp-usage.ts`):
 - No event is lost or merged across sources; alert copy distinguishes direct vs broker mirror.
 - Migration is additive; rollback = revert commit (data untouched).
 - Full suite + typecheck green; UI smoke on phone and desktop widths for the touched pages.
+
+
+## 9. Review log + amendments (2026-09-03 · DesignReviewC, verdict PASS_WITH_RESERVATIONS)
+
+A1. **Single matching channel (P0).** Replace the two-phase matcher with one channel: the
+    broker normalization envelope carries `loginRef` (derived from email when present, never
+    from projectId); direct accounts store `login_ref`. The broker identity derived from a
+    projectId-only report is strictly unmatchable (never a candidate — `aicode-consumers` is
+    shared by all consumer accounts and would collide). Phase-1 recomputation survives only as
+    an offline audit tool, never as a runtime matcher.
+A2. **Persistence (P0).** `loginRef` cannot ride the normalization envelope alone:
+    `validateProviderIdentityObservation` whitelists fields and strips unknowns, and no
+    normalized state survives `pollOnce`. Two compliant options — implementer picks, default A:
+      - A (recommended): keep observatory schema untouched; the background link evaluator stores
+        `broker_identity_id` on the direct account row and canonical views join in memory on
+        `account.broker_identity_id === identity.identityId` (O(1), no validator change). The
+        broker envelope still exposes `loginRef` to the evaluator only.
+      - B: add `login_ref TEXT` to `observatory_identities` + `loginRef` field on
+        `ProviderIdentityObservation`/validator/upsert. More schema churn; only choose if the
+        evaluator cannot run in-process.
+A3. **API/Telegram context wiring (P0).** `ObservatoryApiContext`, `AntigravityApiContext`, and
+    `TelegramContext` must each gain the cross-store handle they need (dashboard.ts + index.ts
+    bridge). `?canonical=true` lives only on existing endpoints; the separate
+    `/api/observatory/canonical` endpoint is dropped.
+A4. **Migration backfill (P1).** `AntigravityStore.migrate()` computes `login_ref` for existing
+    rows from stored email during the same migration (never wait for the next probe).
+A5. **Window-count invariant (P1).** `canonicalWindows = direct pools when probed, else the
+    linked broker's window count for that account, plus broker-only identities' windows`. A
+    merged account with no pools yet never drops its windows from totals.
+A6. **Alert suppression wiring (P1, default OFF).** Implement the `suppressBrokerMirrorAlertsForMerged`
+    flag now (per login, on when direct probing is healthy: last direct probe success < 2 ×
+    probe interval). Default false until the owner confirms real duplicate pings; alert copy
+    source chips ship regardless.
+A7. Label invariant: canonical cards show the direct account's masked label when direct is
+    primary; the broker HMAC slice is never shown as the card label (only in the broker mirror
+    sublist).

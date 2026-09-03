@@ -185,3 +185,37 @@ function reconcile(root, items, { key(item), build(item, existingNode) })
   fresher state.
 - Antigravity polling runs through the same scheduler as the rest of the dashboard.
 - No chart is destroyed/recreated on a data-only tick.
+
+
+## 8. Review log + amendments (2026-09-03 · DesignReviewB, verdict FAIL — P0 blockers fixed here)
+
+B1. **Timestamps (P0).** Verified: `/live` has `timestamp` but its slices lack per-slice
+    `updatedAt`; `/overview` has only `generatedAt`; `/quotas /identities /hosts /sessions
+    /events /policies /api/antigravity/overview` have no top-level timestamp. Backend: add a
+    top-level `updatedAt: ISO` to every observatory and antigravity overview/list response
+    (api.ts handlers). Client: `getSliceTimestamp(data) = data.updatedAt || data.timestamp ||
+    data.generatedAt || max(item.updatedAt|observedAt|occurredAt)` fallback; monotonic guard
+    uses the resolved value and treats equal timestamps as no-op.
+B2. **Scoped transition suspension (P0).** Never touch `<html>`. The batch class is applied to
+    each reconciling widget container only (`.widget-reconciling * { transition: none
+    __omp_shell("important; }`), removed after the paint frame. Toasts, LEDs, hero orbits, and terminal")
+    fades outside the container are untouched.
+B3. **Chart.js contract (P0).** `createChart` must first consult `state.charts.get(id)`: if a
+    live instance exists on an attached canvas, cancel the pending `chartTimers` entry, replace
+    `labels`/`datasets` in place, re-run the gradient helper on the live context, and call
+    `chart.update('none')`. Destroy only on view switches (existing destroyCharts paths).
+B4. **Two-level reconciliation (P1).** Quotas/Credentials: outer reconcile keyed by
+    `identityId` on the container (cards preserved), inner reconcile keyed by window/bucket id
+    inside each card's rows container. Never flatten rows into the outer container.
+B5. **Prepend anchoring (P1).** Capture the top-most visible element key + its rect.top before
+    the diff; after the diff adjust `scrollTop` by that element's delta; when `scrollTop === 0`
+    keep it 0. No `scrollIntoView` on pinned views.
+B6. **Delegation on static roots (P1).** All list/card actions bind once to the static outer
+    wrapper (`#ag-accounts`, `#quotas-container`) via `closest()`; never attach per-card
+    listeners to nodes that reconciliation may replace.
+B7. **Simplifications (P2 accepted):** drop the 300 ms recycleBin and `content-visibility:
+    auto`. SSE dedupe becomes a bounded ring (500 ids).
+B8. **Mechanism decision for the owner.** Hand-rolled keyed leaf mutators + two-level list
+    reconcile (no new dependency, fits the vanilla monolith; recommended) vs vendoring
+    `morphdom` (~5 KB single file) for complex card bodies. Implementer must not pick without
+    owner confirmation.
