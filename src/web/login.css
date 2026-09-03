@@ -65,14 +65,11 @@ body {
   background-size: 200% 200%;
   animation: brand-sheen 9s ease-in-out infinite;
 }
-.brand-mark::after {
-  content: "";
-  width: 62%;
-  height: 62%;
-  border: 3px solid #fff;
-  border-radius: 10px 4px 10px 4px;
-  transform: rotate(45deg);
-  opacity: 0.9;
+.brand-mark svg {
+  width: 60%;
+  height: 60%;
+  display: block;
+  filter: drop-shadow(0 0 8px rgba(232, 121, 249, 0.45));
 }
 h1 {
   font-size: 1.4rem;

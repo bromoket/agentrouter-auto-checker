@@ -113,6 +113,7 @@ function contentType(pathname: string): string {
   if (pathname.endsWith(".html")) return "text/html; charset=utf-8";
   if (pathname.endsWith(".css")) return "text/css; charset=utf-8";
   if (pathname.endsWith(".js")) return "text/javascript; charset=utf-8";
+  if (pathname.endsWith(".svg")) return "image/svg+xml; charset=utf-8";
   if (pathname.endsWith(".png")) return "image/png";
   return "application/octet-stream";
 }
@@ -204,6 +205,12 @@ export function startDashboard(
         }
         if (method === "GET" && url.pathname === "/canonical.js") {
           return serveFile(join(WEB_ROOT, "canonical.js"));
+        }
+        if (method === "GET" && url.pathname === "/favicon.svg") {
+          return serveFile(join(WEB_ROOT, "eye.svg"));
+        }
+        if (method === "GET" && url.pathname === "/eye.svg") {
+          return serveFile(join(WEB_ROOT, "eye.svg"));
         }
 
         const isAuthenticated = config.dashboardAuth.verifyRequest(request);
