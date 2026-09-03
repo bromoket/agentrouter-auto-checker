@@ -37,7 +37,7 @@ interface OpencodeAccountsFile {
   accounts?: unknown;
 }
 
-function parseJsonFile(filePath: string): unknown {
+async function parseJsonFile(filePath: string): Promise<unknown> {
   if (!existsSync(filePath)) {
     throw new Error(`OpenCode accounts file not found: ${filePath}`);
   }
