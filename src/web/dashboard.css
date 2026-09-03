@@ -558,13 +558,26 @@ td.meta-cell { white-space: normal; min-width: 180px; }
   .topbar-actions { justify-self: end; }
 }
 /* Quota row emphasis and reset badges */
-.quota-row-primary { background: linear-gradient(145deg, rgba(139, 92, 246, 0.09), rgba(139, 92, 246, 0.02)); }
+.quota-row-primary { background: linear-gradient(145deg, rgba(139, 92, 246, 0.1), rgba(139, 92, 246, 0.02)); }
 .quota-row-primary .quota-row-label { font-weight: 800; color: #e9d5ff; }
-.quota-row-compact { opacity: 0.86; padding: 7px 10px; }
+.quota-row-compact { opacity: 0.88; padding: 7px 10px; }
 .quota-row-compact .quota-row-label { font-size: 11px; color: var(--dim); }
 .quota-row-compact .quota-track { height: 5px; }
 .reset-credits-badge { font-weight: 800; letter-spacing: 0.02em; }
 .obs-badge.reset-credits-badge { color: #fde68a; border-color: rgba(251, 191, 36, 0.4); background: rgba(251, 191, 36, 0.1); }
+/* Settings subtabs and panes */
+.settings-tabs { display: flex; gap: 6px; margin: -6px 0 18px; border-bottom: 1px solid var(--line); padding-bottom: 12px; }
+.settings-tab { appearance: none; border: 1px solid transparent; background: transparent; color: var(--muted); border-radius: 999px; padding: 8px 14px; font-size: 12px; font-weight: 750; cursor: pointer; transition: all .18s ease; }
+.settings-tab:hover { color: #e9d5ff; background: rgba(139, 92, 246, 0.08); }
+.settings-tab.active { color: #fff; background: linear-gradient(120deg, rgba(139, 92, 246, 0.9), rgba(168, 85, 247, 0.75)); box-shadow: 0 8px 22px rgba(126, 34, 206, 0.35); }
+.settings-pane { margin-top: 4px; }
+.info-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 14px; }
+.info-cell { border: 1px solid var(--line); border-radius: 14px; padding: 13px 14px; background: rgba(255, 255, 255, 0.025); }
+.info-cell span { display: block; color: var(--dim); font-size: 9px; text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: 6px; }
+.info-cell strong { font-size: 13px; overflow-wrap: anywhere; }
+.settings-note { margin-top: 6px; font-size: 11px; line-height: 1.6; }
+.panel, .quota-card.grouped-quota-card, .provider-account-card { transition: border-color .25s ease, box-shadow .25s ease, transform .25s ease; }
+.panel:hover, .quota-card.grouped-quota-card:hover, .provider-account-card:hover { border-color: rgba(192, 132, 252, 0.38); box-shadow: 0 16px 44px rgba(10, 5, 24, 0.3); }
 @media (max-width: 900px) {
   .topbar-quick #account-list { max-width: none; }
   .topbar-subbar { flex-wrap: wrap; gap: 10px; }

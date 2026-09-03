@@ -674,7 +674,13 @@
           </div>
           <button id="close-settings" class="icon-button" type="button" aria-label="Close settings">×</button>
         </div>
-        <div class="field-grid">
+                <div class="settings-tabs" role="tablist" aria-label="Settings sections">
+          <button type="button" class="settings-tab active" data-pane="automation" role="tab" aria-selected="true">⚙️ Automation</button>
+          <button type="button" class="settings-tab" data-pane="observatory" role="tab" aria-selected="false">🔭 Observatory</button>
+          <button type="button" class="settings-tab" data-pane="telegram" role="tab" aria-selected="false">✈️ Telegram</button>
+        </div>
+        <div id="settings-pane-automation">
+<div class="field-grid">
           <label>Cycle interval <span>minutes</span>
             <input id="interval-minutes" type="number" min="5" max="10080" step="1" required>
           </label>
@@ -709,7 +715,27 @@
           <button id="cancel-settings" class="button ghost" type="button">Cancel</button>
           <button class="button primary" type="submit">Save settings</button>
         </div>
-      </form>
+              </div>
+        <section id="settings-pane-observatory" class="settings-pane hidden">
+          <p class="eyebrow">LIVE OBSERVATORY</p>
+          <div class="info-grid" id="settings-observatory-content">
+            <div class="info-cell"><span>Provider identities</span><strong>—</strong></div>
+            <div class="info-cell"><span>Tracked windows</span><strong>—</strong></div>
+            <div class="info-cell"><span>Warnings</span><strong>—</strong></div>
+            <div class="info-cell"><span>Critical / exhausted</span><strong>—</strong></div>
+            <div class="info-cell"><span>Collector sessions</span><strong>—</strong></div>
+          </div>
+          <p class="muted settings-note">Values refresh with the dashboard live feed. Deep-dive in the Provider Quotas and System pages.</p>
+        </section>
+        <section id="settings-pane-telegram" class="settings-pane hidden">
+          <p class="eyebrow">OWNER CHANNEL</p>
+          <div class="info-grid">
+            <div class="info-cell"><span>Recipient</span><strong>Private owner chat · verified</strong></div>
+            <div class="info-cell"><span>Commands</span><strong>/status · /quotas · /balance · /menu</strong></div>
+          </div>
+          <p class="muted settings-note">Dashboard key: ask the owner bot with <code>/key</code>. Alert texts carry a /menu hint.</p>
+        </section>
+</form>
     </dialog>
 
     <!-- POLICY EDITOR DIALOG -->

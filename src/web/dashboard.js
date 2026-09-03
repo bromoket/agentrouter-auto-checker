@@ -2107,6 +2107,48 @@ function openSettingsDialog() {
   byId("interval-minutes").value = automation.intervalMinutes; byId("endpoint-poll-interval").value = automation.endpointPollIntervalMinutes; byId("account-delay-seconds").value = automation.accountDelaySeconds; byId("two-factor-timeout").value = automation.twoFactorTimeoutMinutes; byId("activity-lookback").value = automation.activityLookbackDays; byId("scheduler-enabled").checked = automation.schedulerEnabled; byId("endpoint-polling-enabled").checked = automation.endpointPollingEnabled; byId("run-on-start").checked = automation.runOnStart; byId("open-on-start").checked = automation.openDashboardOnStart; byId("capture-screenshots").checked = automation.captureScreenshots; byId("settings-error").textContent = ""; showModal(byId("settings-dialog"), byId("interval-minutes"));
 }
 
+function settingsTab(name) {
+  for (const tab of document.querySelectorAll(".settings-tab")) {
+    const active = tab.dataset.pane === name;
+    tab.classList.toggle("active", active);
+    tab.setAttribute("aria-selected", active ? "true" : "false");
+  }
+  const auto = byId("settings-pane-automation");
+  const obs = byId("settings-pane-observatory");
+  const tel = byId("settings-pane-telegram");
+  auto.classList.toggle("hidden", name !== "automation");
+  obs.classList.toggle("hidden", name !== "observatory");
+  tel.classList.toggle("hidden", name !== "telegram");
+  if (name === "observatory") populateObservatorySettings();
+}
+
+function populateObservatorySettings() {
+  const content = byId("settings-observatory-content");
+  if (!content) return;
+  const items = listFrom(state.observatory.quotas, ["quotas", "quotaWindows", "windows"]);
+  const identities = listFrom(state.observatory.identities, ["identities", "credentials"]);
+  const cells = content.querySelectorAll(".info-cell strong");
+  const severity = { ok: 0, warning: 1, critical: 2, exhausted: 3 };
+  const statusFn = (q) => {
+    const used = Number(q && q.usedFraction);
+    if (!Number.isFinite(used)) return "ok";
+    if (used >= 1) return "exhausted";
+    if (used >= 0.95) return "critical";
+    if (used >= 0.8) return "warning";
+    return "ok";
+  };
+  const warnings = items.filter((q) => statusFn(q) === "warning").length;
+  const critical = items.filter((q) => ["critical", "exhausted"].includes(statusFn(q))).length;
+  const values = [
+    formatNumber(identities.length),
+    formatNumber(items.length),
+    formatNumber(warnings),
+    formatNumber(critical),
+    state.capabilities && state.capabilities.collectorSessions ? "Enabled (collector)" : "Off (broker only)",
+  ];
+  cells.forEach((cell, index) => { if (values[index] !== undefined) cell.textContent = values[index]; });
+}
+
 async function saveSettings(event) {
   event.preventDefault();
   try {
@@ -2191,7 +2233,8 @@ function bindEvents() {
   document.querySelectorAll(".views-nav [data-view]").forEach((button) => button.addEventListener("click", () => showView(button.dataset.view)));
   for (const id of ["add-account", "rail-add", "onboarding-add", "accounts-add-btn"]) byId(id).addEventListener("click", () => openAccountDialog());
   byId("close-settings").addEventListener("click", () => closeModal(byId("settings-dialog"))); byId("cancel-settings").addEventListener("click", () => closeModal(byId("settings-dialog"))); byId("settings-form").addEventListener("submit", saveSettings);
-  for (const id of ["open-settings", "hero-settings"]) byId(id).addEventListener("click", openSettingsDialog);
+  document.querySelectorAll(".settings-tab").forEach((tab) => tab.addEventListener("click", () => settingsTab(tab.dataset.pane)));
+  for (const id of ["open-settings", "hero-settings"]) byId(id).addEventListener("click", () => { openSettingsDialog(); settingsTab("automation"); });
   byId("overview-open-quotas").addEventListener("click", () => showView("quotas"));
   for (const id of ["run-all", "hero-run"]) byId(id).addEventListener("click", () => runChecks());
   for (const id of ["stop-all", "challenge-stop"]) byId(id).addEventListener("click", stopChecks);
@@ -2243,7 +2286,16 @@ async function refresh() {
 }
 
 async function initialize() {
-  if (typeof Chart !== "undefined") { Chart.defaults.color = "#c5b8d5"; Chart.defaults.font.family = getComputedStyle(document.documentElement).fontFamily; Chart.defaults.devicePixelRatio = Math.min(window.devicePixelRatio || 1, 1.5); }
+  if (typeof Chart !== "undefined") {
+    Chart.defaults.color = "#c5b8d5";
+    Chart.defaults.font.family = getComputedStyle(document.documentElement).fontFamily;
+    Chart.defaults.devicePixelRatio = Math.min(window.devicePixelRatio || 1, 1.5);
+    Chart.defaults.plugins.legend.labels = Object.assign({}, Chart.defaults.plugins.legend.labels, { usePointStyle: true, pointStyle: "circle", boxWidth: 7, padding: 16 });
+    Chart.defaults.plugins.tooltip = Object.assign({}, Chart.defaults.plugins.tooltip, { backgroundColor: "rgba(20, 11, 36, 0.94)", titleColor: "#e9d5ff", bodyColor: "#d8cde4", padding: 12, cornerRadius: 10, boxPadding: 5 });
+    Chart.defaults.datasets.line = Object.assign({}, Chart.defaults.datasets.line, { tension: 0.35, borderWidth: 2, pointRadius: 0, pointHoverRadius: 5, pointBackgroundColor: "#e879f9" });
+    Chart.defaults.datasets.bar = Object.assign({}, Chart.defaults.datasets.bar, { borderRadius: 7, borderSkipped: false, maxBarThickness: 26 });
+    Chart.defaults.scale = Object.assign({}, Chart.defaults.scale, { grid: { color: "rgba(216, 180, 254, 0.08)" }, ticks: { color: "#a89ac0" } });
+  }
   initializeTabs(); bindEvents();
   try { await loadCore(false); } catch (error) { showToast(error.message, true); }
   await loadObservatory();
