@@ -1120,7 +1120,18 @@ function renderProviderAccountOverview() {
     const providerName = provider === "openai-codex" ? "OpenAI Codex / ChatGPT" : provider === "google-antigravity" ? "Google Antigravity" : safeLabel(provider, "Provider");
     const safeIdentityLabel = identity?.label ? safeLabel(identity.label) : maskedIdentifier(identityId, "Quota account");
     copy.append(element("h3", null, safeIdentityLabel), element("p", null, providerName));
-    heading.append(copy, statusBadge(status, "unknown"));
+    const badgesBox = element("div", "entity-badges");
+    const resetCredits = Number(
+      (identity && typeof identity.resetCredits === "number") ? identity.resetCredits
+        : (windows.find((w) => typeof w.resetCredits === "number" && w.resetCredits > 0)?.resetCredits ?? 0)
+    );
+    if (resetCredits > 0) {
+      const creditsBadge = element("span", "obs-badge info reset-credits-badge", `⚡ ${formatNumber(resetCredits)} reset credits`);
+      creditsBadge.title = `${formatNumber(resetCredits)} on-demand reset credits available`;
+      badgesBox.append(creditsBadge);
+    }
+    badgesBox.append(statusBadge(status, "unknown"));
+    heading.append(copy, badgesBox);
 
     const used = numericOrNull(worst?.usedFraction);
     const meter = element("div", "quota-meter");
@@ -1184,6 +1195,49 @@ function renderQuotaSummary(items) {
   );
 }
 
+function createQuotaRow(item, rowLabel) {
+  const status = quotaStatus(item);
+  const row = element("div", `quota-row ${statusClass(status)}`);
+  const header = element("div", "quota-row-header");
+  const labelEl = element("span", "quota-row-label", rowLabel);
+  const used = numericOrNull(item.usedFraction);
+  const usageEl = element("span", "quota-row-usage");
+  usageEl.append(
+    element("strong", null, used === null ? "Unavailable" : `${Math.round(used * 100)}%`),
+    element("span", null, used === null ? "" : " utilized")
+  );
+  header.append(labelEl, usageEl);
+
+  const track = element("div", "quota-track");
+  const fill = element("i", "quota-fill");
+  fill.style.width = used === null ? "0%" : `${Math.min(100, Math.max(0, used * 100))}%`;
+  track.append(fill);
+
+  const meta = element("div", "quota-row-meta");
+  let remDisplay = "Unavailable";
+  if (Number.isFinite(Number(item.remainingFraction))) {
+    const remPct = `${Math.round(Number(item.remainingFraction) * 100)}%`;
+    if (item.remainingUnits !== null && item.remainingUnits !== undefined) {
+      remDisplay = `${remPct} (${formatCompact(item.remainingUnits)} ${item.unit || "units"})`;
+    } else {
+      remDisplay = `${remPct} remaining`;
+    }
+  } else if (item.remainingUnits !== null && item.remainingUnits !== undefined) {
+    remDisplay = `${formatCompact(item.remainingUnits)} ${item.unit || "units"}`;
+  } else if (used !== null) {
+    remDisplay = `${Math.max(0, Math.round((1 - used) * 100))}% remaining`;
+  }
+  const remSpan = element("span", "quota-row-remaining", remDisplay);
+
+  const resetDisplay = item.resetsAt ? `Resets ${formatRelative(item.resetsAt)}` : (item.resetLabel ? safeLabel(item.resetLabel) : "Reset unavailable");
+  const resetSpan = element("span", "quota-row-reset", resetDisplay);
+  if (item.resetsAt) resetSpan.title = formatDate(item.resetsAt, true);
+
+  meta.append(remSpan, resetSpan);
+  row.append(header, track, meta);
+  return row;
+}
+
 function renderQuotas() {
   const container = byId("quotas-container");
   const items = listFrom(state.observatory.quotas, ["quotas", "quotaWindows", "windows"]);
@@ -1199,92 +1253,164 @@ function renderQuotas() {
 
   const providerFilter = byId("quota-provider-filter").value;
   const statusFilter = byId("quota-status-filter").value;
-  const filtered = items.filter((item) => {
-    const provider = String(item.provider || item.kind || "").toLowerCase();
-    const status = quotaStatus(item);
-    return (providerFilter === "all" || provider.includes(providerFilter)) && (statusFilter === "all" || status === statusFilter);
-  });
-  container.replaceChildren();
-  if (!filtered.length) {
-    container.append(stateCard("empty", "No matching quota windows", "Adjust the provider or status filter to inspect other windows."));
-    return;
+  const severity = { ok: 0, warning: 1, critical: 2, exhausted: 3 };
+
+  const allIdentityIds = new Set([
+    ...identities.map((i) => i.identityId),
+    ...items.map((q) => q.identityId).filter(Boolean),
+  ]);
+  if (items.some((q) => !q.identityId)) {
+    allIdentityIds.add(null);
   }
 
-  for (const item of filtered) {
-    const status = quotaStatus(item);
-    const observedAt = observedAtOf(item);
-    const card = element("article", `quota-card ${status}${isStale(observedAt) ? " stale" : ""}`);
+  container.replaceChildren();
+  let renderedCardCount = 0;
+
+  for (const identityId of allIdentityIds) {
+    const identity = identityId ? identitiesById.get(identityId) : null;
+    const accountWindows = items.filter((q) => identityId ? q.identityId === identityId : !q.identityId);
+    const provider = identity?.provider || accountWindows[0]?.provider || "unknown";
+    const providerLower = String(provider).toLowerCase();
+
+    // Provider filter
+    if (providerFilter !== "all") {
+      const matchesProvider = providerLower.includes(providerFilter) || accountWindows.some((w) => String(w.provider || "").toLowerCase().includes(providerFilter));
+      if (!matchesProvider) continue;
+    }
+
+    const worst = [...accountWindows].sort((a, b) => (severity[quotaStatus(b)] || 0) - (severity[quotaStatus(a)] || 0) || finite(b.usedFraction) - finite(a.usedFraction))[0];
+    const accountStatus = worst ? quotaStatus(worst) : identity?.health || "ok";
+
+    // Status filter
+    const matchingWindows = statusFilter === "all" ? accountWindows : accountWindows.filter((w) => quotaStatus(w) === statusFilter);
+    if (statusFilter !== "all" && matchingWindows.length === 0 && accountStatus !== statusFilter) {
+      continue;
+    }
+
+    const observedAt = observedAtOf(worst || identity);
+    const card = element("article", `quota-card grouped-quota-card ${statusClass(accountStatus)}${isStale(observedAt) ? " stale" : ""}`);
     const heading = element("div", "entity-heading");
-    const identityBox = element("div");
+    const copy = element("div");
 
-    const identity = identitiesById.get(item.identityId);
-    const identityLabel = identity?.label ? safeLabel(identity.label) : (item.identityId ? maskedIdentifier(item.identityId, "Identity") : "Global");
-    const providerName = item.provider === "openai-codex" ? "OpenAI Codex" : item.provider === "google-antigravity" ? "Google Antigravity" : safeLabel(item.provider, "Provider");
+    const providerName = provider === "openai-codex" ? "OpenAI Codex" : provider === "google-antigravity" ? "Google Antigravity" : safeLabel(provider, "Provider");
+    const safeIdentityLabel = identity?.label ? safeLabel(identity.label) : (identityId ? maskedIdentifier(identityId, "Identity") : "Global Quota Pool");
 
-    const windowLabel = safeLabel(item.resetLabel || item.windowLabel || item.meter || item.model, "Quota window");
-    const bucketDetail = item.windowId && item.windowId !== item.bucketId
-      ? `${windowLabel} · ${maskedIdentifier(item.windowId, "Window")}`
-      : (item.bucketId ? `${windowLabel} · ${maskedIdentifier(item.bucketId, "Bucket")}` : windowLabel);
-
-    identityBox.append(
-      element("h3", null, `${providerName} · ${identityLabel}`),
-      element("p", null, bucketDetail),
-    );
-    heading.append(identityBox, statusBadge(status));
-
-    const used = numericOrNull(item.usedFraction);
-    const meter = element("div", "quota-meter");
-    const copy = element("div", "quota-meter-copy");
     copy.append(
-      element("strong", null, used === null ? "Unavailable" : `${Math.round(used * 100)}%`),
-      element("span", null, used === null ? "utilization unavailable" : "utilized"),
+      element("h3", null, `${providerName} · ${safeIdentityLabel}`),
+      element("p", null, `${matchingWindows.length} tracked quota ${matchingWindows.length === 1 ? "window" : "windows"}`),
     );
-    const track = element("div", "quota-track");
-    const fill = element("i", "quota-fill");
-    fill.style.width = used === null ? "0%" : `${Math.min(100, Math.max(0, used * 100))}%`;
-    track.append(fill);
-    meter.append(copy, track);
 
-    const stats = element("div", "entity-stats");
+    const badgesBox = element("div", "entity-badges");
+    const resetCredits = Number(
+      (identity && typeof identity.resetCredits === "number") ? identity.resetCredits
+        : (accountWindows.find((w) => typeof w.resetCredits === "number" && w.resetCredits > 0)?.resetCredits ?? 0)
+    );
+    if (resetCredits > 0) {
+      const creditsBadge = element("span", "obs-badge info reset-credits-badge", `⚡ ${formatNumber(resetCredits)} reset credits`);
+      creditsBadge.title = `${formatNumber(resetCredits)} on-demand reset credits available`;
+      badgesBox.append(creditsBadge);
+    }
+    badgesBox.append(statusBadge(accountStatus, "unknown"));
+    heading.append(copy, badgesBox);
 
-    // Remaining stat
-    const remaining = element("div", "entity-stat");
-    let remDisplay = "Unavailable";
-    if (Number.isFinite(Number(item.remainingFraction))) {
-      const remPct = `${Math.round(Number(item.remainingFraction) * 100)}%`;
-      if (item.remainingUnits !== null && item.remainingUnits !== undefined) {
-        remDisplay = `${remPct} (${formatCompact(item.remainingUnits)} ${item.unit || "units"})`;
-      } else {
-        remDisplay = `${remPct} remaining`;
+    const rowsContainer = element("div", "quota-rows-container");
+
+    const isCodex = provider === "openai-codex" || providerLower.includes("codex") || providerLower.includes("openai");
+    const isAntigravity = provider === "google-antigravity" || providerLower.includes("antigravity");
+
+    if (isCodex) {
+      let win5h = null;
+      let win7d = null;
+      const extraCodexWindows = [];
+
+      for (const w of matchingWindows) {
+        const wid = String(w.windowId || "").toLowerCase();
+        const dur = w.windowDurationMs;
+        const label = String(w.resetLabel || w.windowLabel || "").toLowerCase();
+
+        if (!win5h && (wid === "5h" || dur === 18_000_000 || wid.includes("5h") || label.includes("5h") || label.includes("5 hour") || label.includes("5-hour"))) {
+          win5h = w;
+        } else if (!win7d && (wid === "7d" || wid === "weekly" || dur === 604_800_000 || wid.includes("7d") || label.includes("7d") || label.includes("7 day") || label.includes("7-day") || label.includes("weekly"))) {
+          win7d = w;
+        } else {
+          extraCodexWindows.push(w);
+        }
       }
-    } else if (item.remainingUnits !== null && item.remainingUnits !== undefined) {
-      remDisplay = `${formatCompact(item.remainingUnits)} ${item.unit || "units"}`;
-    } else if (used !== null) {
-      remDisplay = `${Math.max(0, Math.round((1 - used) * 100))}% remaining`;
-    }
-    remaining.append(element("span", null, "Remaining"), element("strong", null, remDisplay));
 
-    // Reset stat
-    const reset = element("div", "entity-stat");
-    const resetDisplay = item.resetsAt ? formatRelative(item.resetsAt) : (item.resetLabel ? safeLabel(item.resetLabel) : "Unavailable");
-    const resetEl = element("strong", null, resetDisplay);
-    if (item.resetsAt) {
-      resetEl.title = formatDate(item.resetsAt, true);
-    }
-    reset.append(element("span", null, "Reset"), resetEl);
+      if (win5h) {
+        rowsContainer.append(createQuotaRow(win5h, "5-Hour Window"));
+      }
+      if (win7d) {
+        rowsContainer.append(createQuotaRow(win7d, "7-Day Window"));
+      }
+      for (const extra of extraCodexWindows) {
+        rowsContainer.append(createQuotaRow(extra, safeLabel(extra.resetLabel || extra.windowLabel || extra.meter || extra.model || extra.windowId, "Quota window")));
+      }
+    } else if (isAntigravity) {
+      const families = new Map();
+      for (const w of matchingWindows) {
+        let familyName = "Default";
+        if (w.meter && !["default", "window", "daily", "weekly"].includes(w.meter.toLowerCase())) {
+          familyName = w.meter;
+        } else if (w.bucketId) {
+          const parts = w.bucketId.split(":");
+          if (parts.length >= 2 && !["google-antigravity", "daily", "weekly", "default"].includes(parts[1])) {
+            familyName = parts[1];
+          }
+        } else if (w.model) {
+          familyName = w.model;
+        } else {
+          const match = /\(([^)]+)\)/.exec(w.resetLabel || w.windowLabel || "");
+          if (match) familyName = match[1];
+        }
 
-    // Model / Meter or Scope stat
-    const modelOrMeter = item.model || item.meter || item.tier;
-    if (modelOrMeter) {
-      const modelStat = element("div", "entity-stat");
-      modelStat.append(element("span", null, "Model / Meter"), element("strong", null, safeLabel(modelOrMeter)));
-      stats.append(remaining, reset, modelStat);
+        familyName = familyName.charAt(0).toUpperCase() + familyName.slice(1);
+        if (!families.has(familyName)) {
+          families.set(familyName, { daily: null, weekly: null, others: [] });
+        }
+
+        const fam = families.get(familyName);
+        const wid = String(w.windowId || "").toLowerCase();
+        const dur = w.windowDurationMs;
+        const label = String(w.resetLabel || w.windowLabel || "").toLowerCase();
+
+        if (!fam.daily && (wid === "daily" || dur === 86_400_000 || wid.includes("daily") || label.includes("daily"))) {
+          fam.daily = w;
+        } else if (!fam.weekly && (wid === "weekly" || wid === "7d" || dur === 604_800_000 || wid.includes("weekly") || wid.includes("7d") || label.includes("weekly") || label.includes("7 day") || label.includes("7-day"))) {
+          fam.weekly = w;
+        } else {
+          fam.others.push(w);
+        }
+      }
+
+      for (const [famName, famData] of families) {
+        if (famData.daily) {
+          rowsContainer.append(createQuotaRow(famData.daily, `${famName} (Daily)`));
+        }
+        if (famData.weekly) {
+          rowsContainer.append(createQuotaRow(famData.weekly, `${famName} (Weekly)`));
+        }
+        for (const other of famData.others) {
+          rowsContainer.append(createQuotaRow(other, `${famName} · ${safeLabel(other.resetLabel || other.windowLabel || other.windowId, "Quota window")}`));
+        }
+      }
     } else {
-      stats.append(remaining, reset);
+      for (const w of matchingWindows) {
+        rowsContainer.append(createQuotaRow(w, safeLabel(w.resetLabel || w.windowLabel || w.meter || w.model || w.windowId, "Quota window")));
+      }
     }
 
-    card.append(heading, meter, stats, metadataBadges(item, "Observatory broker", safeLabel(item.provider || "provider")));
+    if (!rowsContainer.children.length) {
+      rowsContainer.append(element("p", "muted", "No quota windows match the current filter."));
+    }
+
+    card.append(heading, rowsContainer, metadataBadges(worst || identity, "Observatory broker", providerName));
     container.append(card);
+    renderedCardCount += 1;
+  }
+
+  if (renderedCardCount === 0) {
+    container.append(stateCard("empty", "No matching quota windows", "Adjust the provider or status filter to inspect other windows."));
   }
 }
 function renderCredentials() {
@@ -1829,7 +1955,7 @@ async function savePolicy(event) {
 
 function setActiveViewNavigation(name) {
   document.querySelectorAll(".views-nav [data-view]").forEach((button) => {
-    const active = button.dataset.view === name;
+    const active = button.dataset.view === name || (name === "credentials" && button.dataset.view === "quotas");
     button.classList.toggle("active", active);
     if (active) {
       button.setAttribute("aria-current", "page");

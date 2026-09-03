@@ -20,7 +20,7 @@
 
     <header class="topbar glass">
       <button id="brand-home" class="brand" type="button" aria-label="Open AI Fleet Observatory Overview">
-        <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+        <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 32 32"><defs><linearGradient id="eye-br" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#8b5cf6"/><stop offset="0.45" stop-color="#c084fc"/><stop offset="0.8" stop-color="#e879f9"/><stop offset="1" stop-color="#f472b6"/></linearGradient></defs><path d="M3.2 16C6.6 9 11.3 7 16 7s9.4 2 12.8 9c-3.4 7-8.1 9-12.8 9S6.6 23 3.2 16Z" fill="none" stroke="url(#eye-br)" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/><circle cx="16" cy="16" r="5.4" fill="url(#eye-br)"/><circle cx="18.1" cy="13.9" r="1.7" fill="#fff" opacity="0.92"/></svg></span>
         <span>
           <small>AI FLEET</small>
           <strong>Observatory</strong>
@@ -30,6 +30,8 @@
         <span id="sse-state" class="status-chip ok" title="Observatory real-time stream status" aria-live="polite"><i></i><span>Live Stream</span></span>
         <span id="scheduler-state" class="status-chip neutral"><i></i><span>Loading automation</span></span>
         <span id="next-run-label" class="next-run">Calculating next cycle…</span>
+        <span id="schedule-label" class="next-run"></span>
+        <code id="account-file" class="hidden">Protected local vault</code>
       </div>
       <div class="topbar-actions">
         <button id="stop-all" class="button danger-button hidden" type="button" aria-label="Stop collection cycle"><span aria-hidden="true">■</span> <span class="action-label">Stop</span></button>
@@ -37,6 +39,58 @@
         <button id="open-settings" class="button icon-only" type="button" aria-label="Schedule and observatory settings"><svg class="ui-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M12 15.2a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4Z"/><path d="m19.4 13.5 1.1.9-2 3.4-1.4-.55a7.6 7.6 0 0 1-1.6.9l-.2 1.48h-4l-.2-1.48a7.6 7.6 0 0 1-1.6-.9l-1.4.55-2-3.4 1.1-.9a8.2 8.2 0 0 1 0-1.9l-1.1-.9 2-3.4 1.4.55a7.6 7.6 0 0 1 1.6-.9l.2-1.48h4l.2 1.48a7.6 7.6 0 0 1 1.6.9l1.4-.55 2 3.4-1.1.9a8.2 8.2 0 0 1 0 1.9Z"/></svg></button>
         <button id="add-account" class="button secondary" type="button" aria-label="Add account"><span aria-hidden="true">＋</span> <span class="action-label">Account</span></button>
         <button id="logout-btn" class="button ghost" type="button" title="Sign out" aria-label="Sign out"><span aria-hidden="true">⎋</span> <span class="action-label">Sign out</span></button>
+      </div>
+    
+      <div class="topbar-subbar">
+        <div class="topbar-pills-scroll">
+<nav class="views-nav" aria-label="Observatory views">
+          <button id="overview-nav" class="nav-card active" type="button" data-view="overview" aria-label="Overview command center" aria-current="page">
+            <span class="nav-icon spectrum">◈</span>
+            <span><strong>Overview</strong><small>Fleet & command center</small></span>
+            <b id="overview-health" class="health-dot neutral" aria-hidden="true"></b>
+          </button>
+          <button id="nav-quotas" class="nav-card" type="button" data-view="quotas" aria-label="Provider Quotas view">
+            <span class="nav-icon">Q</span>
+            <span><strong>Provider Quotas</strong><small>Utilization & limits</small></span>
+            <b id="quotas-health" class="health-dot neutral" aria-hidden="true"></b>
+          </button>
+          <button id="nav-accounts" class="nav-card" type="button" data-view="accounts" aria-label="AgentRouter Accounts view">
+            <span class="nav-icon">AR</span>
+            <span><strong>AgentRouter</strong><small>Accounts & balances</small></span>
+            <b id="accounts-health" class="health-dot neutral" aria-hidden="true"></b>
+          </button>
+          <button id="nav-notifications" class="nav-card" type="button" data-view="notifications" aria-label="Notifications view">
+            <span class="nav-icon">N</span>
+            <span><strong>Notifications</strong><small>Policies & routing</small></span>
+            <b id="notifications-health" class="health-dot neutral" aria-hidden="true"></b>
+          </button>
+          <button id="nav-events" class="nav-card" type="button" data-view="events" aria-label="Events and audit view">
+            <span class="nav-icon">E</span>
+            <span><strong>Events / Audit</strong><small>Audit trail & alerts</small></span>
+            <b id="events-health" class="health-dot neutral" aria-hidden="true"></b>
+          </button>
+          <button id="nav-health" class="nav-card" type="button" data-view="health" aria-label="System Health view">
+            <span class="nav-icon">♥</span>
+            <span><strong>System Health</strong><small>Observatory status</small></span>
+            <b id="health-health" class="health-dot neutral" aria-hidden="true"></b>
+          </button>
+        </nav>
+        </div>
+        <div class="topbar-quick">
+<div class="rail-heading rail-subheading">
+          <span>QUICK ACCOUNTS</span>
+          <button id="rail-add" class="mini-button" type="button" aria-label="Add account">＋</button>
+        </div>
+        <div id="account-list" class="account-list" role="list" aria-label="Configured AgentRouter accounts"></div>
+        <div id="onboarding" class="onboarding hidden">
+          <span class="onboarding-icon">＋</span>
+          <strong>Add your first account</strong>
+          <p>Credentials stay in the protected local file and never enter the browser UI again.</p>
+          <button id="onboarding-add" class="button primary" type="button">Configure account</button>
+        </div>
+
+        
+        </div>
       </div>
     </header>
 
@@ -75,65 +129,7 @@
     </section>
 
     <main id="main-content" class="app-shell" tabindex="-1">
-      <aside class="rail glass" aria-label="Observatory Navigation">
-        <div class="rail-heading">
-          <span>FLEET OBSERVATORY</span>
-        </div>
-        <nav class="views-nav" aria-label="Observatory views">
-          <button id="overview-nav" class="nav-card active" type="button" data-view="overview" aria-label="Overview command center" aria-current="page">
-            <span class="nav-icon spectrum">◈</span>
-            <span><strong>Overview</strong><small>Fleet & command center</small></span>
-            <b id="overview-health" class="health-dot neutral" aria-hidden="true"></b>
-          </button>
-          <button id="nav-quotas" class="nav-card" type="button" data-view="quotas" aria-label="Provider Quotas view">
-            <span class="nav-icon">Q</span>
-            <span><strong>Provider Quotas</strong><small>Utilization & limits</small></span>
-            <b id="quotas-health" class="health-dot neutral" aria-hidden="true"></b>
-          </button>
-          <button id="nav-credentials" class="nav-card" type="button" data-view="credentials" aria-label="Provider Credentials view">
-            <span class="nav-icon">ID</span>
-            <span><strong>Quota Accounts</strong><small>OpenAI & Antigravity</small></span>
-            <b id="credentials-health" class="health-dot neutral" aria-hidden="true"></b>
-          </button>
-          <button id="nav-accounts" class="nav-card" type="button" data-view="accounts" aria-label="AgentRouter Accounts view">
-            <span class="nav-icon">AR</span>
-            <span><strong>AgentRouter</strong><small>Accounts & balances</small></span>
-            <b id="accounts-health" class="health-dot neutral" aria-hidden="true"></b>
-          </button>
-          <button id="nav-notifications" class="nav-card" type="button" data-view="notifications" aria-label="Notifications view">
-            <span class="nav-icon">N</span>
-            <span><strong>Notifications</strong><small>Policies & routing</small></span>
-            <b id="notifications-health" class="health-dot neutral" aria-hidden="true"></b>
-          </button>
-          <button id="nav-events" class="nav-card" type="button" data-view="events" aria-label="Events and audit view">
-            <span class="nav-icon">E</span>
-            <span><strong>Events / Audit</strong><small>Audit trail & alerts</small></span>
-            <b id="events-health" class="health-dot neutral" aria-hidden="true"></b>
-          </button>
-          <button id="nav-health" class="nav-card" type="button" data-view="health" aria-label="System Health view">
-            <span class="nav-icon">♥</span>
-            <span><strong>System Health</strong><small>Observatory status</small></span>
-            <b id="health-health" class="health-dot neutral" aria-hidden="true"></b>
-          </button>
-        </nav>
-
-        <div class="rail-heading rail-subheading">
-          <span>AGENTROUTER ACCOUNTS</span>
-          <button id="rail-add" class="mini-button" type="button" aria-label="Add account">＋</button>
-        </div>
-        <div id="account-list" class="account-list" role="list" aria-label="Configured AgentRouter accounts"></div>
-        <div id="onboarding" class="onboarding hidden">
-          <span class="onboarding-icon">＋</span>
-          <strong>Add your first account</strong>
-          <p>Credentials stay in the protected local file and never enter the browser UI again.</p>
-          <button id="onboarding-add" class="button primary" type="button">Configure account</button>
-        </div>
-
-        <div class="rail-footer">
-          <div><span>Schedule</span><strong id="schedule-label">Loading…</strong></div>
-          <div><span>Credential vault</span><code id="account-file">Protected local vault</code></div>
-        </div>
-      </aside>
+      
 
       <section class="workspace">
         <!-- VIEW 1: OVERVIEW -->
