@@ -215,3 +215,32 @@ opencode JSON (path from env or default above), validates schema v4, then writes
 account into the new encrypted observatory table (refresh token encrypted with env key),
 with label=email, fingerprint JSON stored, enabled flag preserved. Report imported count +
 any accounts missing refresh tokens; do not log token values.
+
+
+## 11. Implementation status + live findings (2026-09-03, deployed at d7c8e1f)
+
+Deployed and verified on the Xeon service:
+- Antigravity store + collector run in the service process (5 min default probe interval,
+  immediate probe on start). 10 accounts imported from the opencode config and probing OK.
+- Dashboard: new top-level "Antigravity" view with per-account cards (Gemini pool /
+  Claude+GPT pool bars with server resetTime countdowns, tier chip, reset-credits chip,
+  probe/ pause / remove), status strip, and OAuth add-account flow. Static assets mounted
+  at /antigravity.css + /antigravity.js.
+- Live probes feed the shared observatory quota machine (provider "google-antigravity",
+  identities masked as "Google Antigravity (<id8>)", buckets antigravity-gemini /
+  antigravity-claude-gpt / antigravity-cli), so quota_reset / reset_credit events,
+  policies, and Telegram delivery apply unchanged.
+
+Live API facts verified by direct probing (never guess past these):
+- loadCodeAssist: body MUST be `{}`. A metadata body is rejected (any metadata.platform
+  value is an invalid enum) and omitting platform drops cloudaicompanionProject, which
+  made retrieveUserQuota 403 "no valid license" because the fallback project was used.
+- loadCodeAssist `{}` returns currentTier/paidTier/allowedTiers/cloudaicompanionProject
+  (consumer accounts resolve to project "aicode-consumers").
+- retrieveUserQuota body `{project}` returns per-model WTUS buckets (200). Pool reset
+  times differ per model/pool (observed claude-gpt rolls ~5h on some accounts and days on
+  others) — bars show the real server resetTime, never a fabricated 7d window.
+- CLI REQUESTS path (retrieveCliQuota on PROD with google-api-nodejs UA) currently fails
+  for these accounts; collector treats it best-effort and omits the CLI bar.
+- Identity labels must be masked (observatory validation rejects email-like labels).
+- Observed credits: availableCredits currently 0/absent for free-tier accounts.
