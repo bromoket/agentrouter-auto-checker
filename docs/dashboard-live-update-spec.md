@@ -219,3 +219,23 @@ B8. **Mechanism decision for the owner.** Hand-rolled keyed leaf mutators + two-
     reconcile (no new dependency, fits the vanilla monolith; recommended) vs vendoring
     `morphdom` (~5 KB single file) for complex card bodies. Implementer must not pick without
     owner confirmation.
+
+
+## 9. Owner decisions (2026-09-03)
+
+D1. Reconcile mechanism: **morphdom**. Vendored as a single UMD file served by the dashboard
+    (no bundler, no build step). Additional small dependencies are allowed when they earn their
+    keep (owner: "feel free to get it"); every dependency must be vendored/served statically the
+    same way and listed in this spec's implementation notes.
+D2. Implementation pattern (replaces the hand-rolled `reconcile` in §3.2):
+    - `keyedMorph(root, items, { key, template })`: each item renders into a keyed child slot;
+      morphdom diffs the existing child against the fresh template HTML in place (identity,
+      focus, and transitions preserved), new keys append, missing keys detach. Order changes
+      move nodes via insertBefore.
+    - No `data-render-count` tear-down: containers keep their first-paint DOM; subsequent
+      paints are morphdom diffs.
+    - Template functions stay (accountCard/quotaRow/eventRow …); they produce the HTML that
+      morphdom diffs — no manual leaf-mutator code is written per card.
+D3. Keep §3.3 transition discipline but apply it per morph pass on the reconciled container
+    only; morphdom naturally reuses nodes so CSS width transitions animate real deltas and
+    never restart from empty.

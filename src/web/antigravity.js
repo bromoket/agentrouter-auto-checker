@@ -149,22 +149,45 @@
     `;
   }
 
-  function renderAccounts() {
+  function ensureAccountGrid() {
     const container = byId("ag-accounts");
+    let grid = container.querySelector(":scope > .ag-account-grid");
+    if (!grid) {
+      grid = document.createElement("div");
+      grid.className = "ag-account-grid";
+      container.appendChild(grid);
+    }
+    return grid;
+  }
+
+  function renderEmptyAccounts() {
+    const container = byId("ag-accounts");
+    if (container.querySelector("#ag-empty-add")) return; // already shown
+    container.innerHTML = `
+      <div class="panel glass">
+        <header class="panel-heading"><div><p class="eyebrow">FIRST ACCOUNT</p><h2>No Antigravity accounts yet</h2><p class="muted">Add your first Google Antigravity account through OAuth. Credentials stay encrypted on the server; only quota numbers are stored by the observatory.</p></div></header>
+        <div class="ag-actions"><button class="btn primary" type="button" id="ag-empty-add">Add Antigravity account</button></div>
+      </div>`;
+  }
+
+  function renderAccounts() {
     const accounts = state.overview?.accounts ?? [];
-    if (accounts.length === 0) {
-      container.innerHTML = `
-        <div class="panel glass">
-          <header class="panel-heading"><div><p class="eyebrow">FIRST ACCOUNT</p><h2>No Antigravity accounts yet</h2><p class="muted">Add your first Google Antigravity account through OAuth. Credentials stay encrypted on the server; only quota numbers are stored by the observatory.</p></div></header>
-          <div class="ag-actions"><button class="btn primary" type="button" id="ag-empty-add">Add Antigravity account</button></div>
-        </div>`;
-      byId("ag-empty-add")?.addEventListener("click", () => openOauthPanel());
+    if (!Array.isArray(accounts) || accounts.length === 0) {
+      renderEmptyAccounts();
       return;
     }
-    container.innerHTML = `<div class="ag-account-grid">${accounts.map(accountCard).join("")}</div>`;
-    $$(".ag-probe", container).forEach((btn) => btn.addEventListener("click", () => probeOne(btn.dataset.agId)));
-    $$(".ag-toggle", container).forEach((btn) => btn.addEventListener("click", () => toggleAccount(btn.dataset.agId, btn.dataset.next)));
-    $$(".ag-delete", container).forEach((btn) => btn.addEventListener("click", () => deleteAccount(btn.dataset.agId)));
+    const grid = ensureAccountGrid();
+    if (window.LiveKit && window.LiveKit.hasMorphdom) {
+      // Keyed in-place morph: cards keep DOM identity across refreshes; only changed
+      // text/bar-widths are patched, so nothing flickers or reorders.
+      window.LiveKit.keyedMorph(grid, accounts, {
+        key: (account) => account.id,
+        keyAttr: "agId",
+        html: accountCard,
+      });
+    } else {
+      grid.innerHTML = accounts.map(accountCard).join("");
+    }
     updateCountdowns();
   }
 
@@ -312,12 +335,23 @@
     }
   }
 
-  // Wire UI events (element presence is guaranteed because this file is defer-loaded after the markup)
+  // Wire UI events (element presence is guaranteed because this file is defer-loaded after the markup).
+  // Card actions are delegated on the static wrapper once so reconciliation never drops them.
   byId("ag-probe-all")?.addEventListener("click", probeAll);
   byId("ag-add-open")?.addEventListener("click", openOauthPanel);
   byId("ag-oauth-start")?.addEventListener("click", openOauthPanel);
   byId("ag-oauth-submit")?.addEventListener("click", submitOauth);
   byId("ag-oauth-cancel")?.addEventListener("click", () => byId("ag-oauth-panel").classList.add("hidden"));
+  byId("ag-accounts")?.addEventListener("click", (event) => {
+    const probe = event.target.closest(".ag-probe");
+    const toggle = event.target.closest(".ag-toggle");
+    const remove = event.target.closest(".ag-delete");
+    const emptyAdd = event.target.closest("#ag-empty-add");
+    if (probe) probeOne(probe.dataset.agId);
+    else if (toggle) toggleAccount(toggle.dataset.agId, toggle.dataset.next);
+    else if (remove) deleteAccount(remove.dataset.agId);
+    else if (emptyAdd) openOauthPanel();
+  });
 
   // Expose hooks for dashboard.js view routing
   window.renderAntigravityView = () => {

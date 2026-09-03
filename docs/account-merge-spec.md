@@ -268,3 +268,14 @@ A6. **Alert suppression wiring (P1, default OFF).** Implement the `suppressBroke
 A7. Label invariant: canonical cards show the direct account's masked label when direct is
     primary; the broker HMAC slice is never shown as the card label (only in the broker mirror
     sublist).
+
+
+## 10. Owner decisions (2026-09-03)
+
+D1. Linking approach: **Option A** — join on `broker_identity_id` stored on the direct account
+    row (background link evaluator populates it; observatory schema untouched; canonical views
+    join in memory). Option B (observatory column) is dropped.
+D2. **No broker-mirror alert suppression.** Amendment A6 is dropped entirely: both sources'
+    events and alerts always flow; alert copy keeps `[fleet oauth]` vs `[broker]` source chips
+    so the owner can tell them apart. Do not build suppression flags or plumb "direct healthy"
+    gating anywhere.

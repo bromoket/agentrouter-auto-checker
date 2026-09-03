@@ -276,6 +276,13 @@ export function startDashboard(
         if (method === "GET" && url.pathname === "/vendor/chart.umd.js") {
           return serveFile(CHART_BUNDLE);
         }
+        if (method === "GET" && url.pathname === "/vendor/morphdom.js") {
+          return serveFile(join(WEB_ROOT, "vendor", "morphdom.js"));
+        }
+        if (method === "GET" && url.pathname === "/live-kit.js") {
+          return serveFile(join(WEB_ROOT, "live-kit.js"));
+        }
+        }
 
         if (method === "GET" && url.pathname === "/api/bootstrap") {
           const accounts = await accountStore.listPublic();
