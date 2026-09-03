@@ -31,6 +31,8 @@ import type {
   ObservatoryAgentRouterRun,
   ObservatoryAgentRouterUsagePoint,
   ObservatoryEventCandidate,
+  ProviderIdentityObservation,
+  QuotaObservationInput,
   StoredObservatoryEvent,
   StoredProviderTracker,
 } from "./types";
@@ -158,6 +160,134 @@ export class ObservatoryCoordinator {
     this.retentionStarted = false;
   }
 
+  /**
+   * Public ingestion for external quota collectors (e.g. Antigravity direct probes).
+   * Mirrors the omp-usage loop semantics exactly: identity/provider trackers, quota
+   * observations + trackers, events, broadcast, and Telegram outbox, all transactional.
+   */
+  async ingestBatch(snapshot: {
+    observedAt: string;
+    host?: {
+      hostId: string;
+      operatorLabel: string;
+      platform: string;
+      collectorVersion: string;
+      lastSeenAt: string;
+      status: string;
+    } | null;
+    identities: ProviderIdentityObservation[];
+    quotas: QuotaObservationInput[];
+  }): Promise<void> {
+    const emitted: StoredObservatoryEvent[] = [];
+    this.store.withTransaction(() => {
+      if (snapshot.host) {
+        this.store.upsertHost({
+          hostId: snapshot.host.hostId,
+          operatorLabel: snapshot.host.operatorLabel,
+          platform: snapshot.host.platform,
+          collectorVersion: snapshot.host.collectorVersion,
+          lastSeenAt: snapshot.host.lastSeenAt,
+          observedAt: snapshot.observedAt,
+          status: snapshot.host.status,
+        });
+      }
+      for (const identity of snapshot.identities) {
+        this.store.upsertIdentity(identity);
+        const trackerKey = `provider:${identity.provider}:${identity.identityId}`;
+        const stored = this.store.getProviderTracker(trackerKey);
+        const level = stored ? providerIncidentLevel(stored) : "none";
+        const previous: EventProviderTrackerState | null = stored ? {
+          identityId: stored.identityId,
+          provider: stored.provider,
+          lastHealth: stored.health,
+          consecutiveFailures: stored.consecutiveFailures,
+          consecutiveBlocked: stored.consecutiveBlocked,
+          consecutiveDisabled: stored.consecutiveDisabled,
+          incidentId: level === "none" ? null : `${trackerKey}:${stored.incidentEpoch}`,
+          incidentLevel: level,
+          incidentEpoch: stored.incidentEpoch,
+          lastObservedAt: stored.lastObservedAt,
+        } : null;
+        const transition = evaluateProviderTransition(previous, identity);
+        const next = transition.nextState;
+        this.store.upsertProviderTracker({
+          trackerKey,
+          identityId: next.identityId,
+          provider: next.provider,
+          sourceHostId: identity.sourceHostId,
+          lastObservedAt: next.lastObservedAt,
+          health: next.lastHealth,
+          consecutiveFailures: next.consecutiveFailures,
+          consecutiveBlocked: next.consecutiveBlocked,
+          consecutiveDisabled: next.consecutiveDisabled,
+          downIncidentActive: next.incidentLevel === "down",
+          blockedIncidentActive: next.incidentLevel === "blocked",
+          disabledIncidentActive: next.incidentLevel === "disabled",
+          cooldownIncidentActive: next.incidentLevel === "cooldown",
+          collectorFailureActive: false,
+          incidentEpoch: next.incidentEpoch,
+        });
+        for (const candidate of transition.events) emitted.push(this.recordEventCandidate(candidate));
+      }
+
+      for (const quota of snapshot.quotas) {
+        const trackerKey = buildQuotaTrackerKey(quota);
+        const stored = this.store.getQuotaTracker(trackerKey);
+        const previous: EventQuotaTrackerState | null = stored ? {
+          trackerKey: stored.trackerKey,
+          identityId: stored.identityId,
+          provider: stored.provider,
+          bucketId: stored.bucketId,
+          windowId: stored.windowId,
+          meter: quota.meter,
+          model: quota.model,
+          tier: quota.tier,
+          generation: stored.generation,
+          warningArmEpoch: stored.warningArmEpoch,
+          criticalArmEpoch: stored.criticalArmEpoch,
+          exhaustedArmEpoch: stored.exhaustedArmEpoch,
+          creditChangeSeq: stored.creditChangeSequence,
+          lastObservedAt: stored.lastObservedAt,
+          lastUsedFraction: stored.lastUsedFraction,
+          lastRemainingFraction: stored.lastRemainingFraction ?? Math.max(0, 1 - stored.lastUsedFraction),
+          lastResetCredits: stored.lastResetCredits ?? null,
+          warningFired: stored.warningFired,
+          criticalFired: stored.criticalFired,
+          exhaustedFired: stored.exhaustedFired,
+        } : null;
+        const transition = evaluateQuotaTransition(previous, quota);
+        const next = transition.nextState;
+        this.store.recordQuotaObservation(quota);
+        this.store.upsertQuotaTracker({
+          trackerKey: next.trackerKey,
+          identityId: next.identityId,
+          provider: next.provider,
+          bucketId: next.bucketId,
+          windowId: next.windowId,
+          generation: next.generation,
+          lastObservedAt: next.lastObservedAt,
+          lastUsedFraction: next.lastUsedFraction,
+          lastRemainingFraction: next.lastRemainingFraction,
+          lastResetCredits: next.lastResetCredits,
+          warningFired: next.warningFired,
+          criticalFired: next.criticalFired,
+          exhaustedFired: next.exhaustedFired,
+          warningArmEpoch: next.warningArmEpoch,
+          criticalArmEpoch: next.criticalArmEpoch,
+          exhaustedArmEpoch: next.exhaustedArmEpoch,
+          creditChangeSequence: next.creditChangeSeq,
+          consecutiveFailures: stored?.consecutiveFailures ?? 0,
+          failureAlertSent: stored?.failureAlertSent ?? false,
+          lastResetAt: transition.resetConfirmed ? next.lastObservedAt : stored?.lastResetAt,
+          lastNotifiedResetAt: stored?.lastNotifiedResetAt,
+        });
+        for (const candidate of transition.events) emitted.push(this.recordEventCandidate(candidate));
+      }
+    });
+    for (const event of emitted) this.broadcast(event);
+    await this.deliveryManagerInternal.processOutboxOnce();
+  }
+
   private async pollingLoop(): Promise<void> {
     let nextPoll = Date.now();
     while (this.running && this.pollerStarted) {
@@ -233,117 +363,22 @@ export class ObservatoryCoordinator {
     try {
       const normalized = await this.ompExecutor();
 
-      const emitted: StoredObservatoryEvent[] = [];
-      this.store.withTransaction(() => {
-        this.store.upsertHost({
+      this.ingestBatch({
+        observedAt: normalized.observedAt,
+        host: {
           hostId: this.config.observatory.sourceHostId,
           operatorLabel: "AgentRouter Local Node",
           platform: process.platform,
           collectorVersion: this.config.observatory.ompVersion ?? "unknown",
-          observedAt: normalized.observedAt,
           lastSeenAt: normalized.observedAt,
           status: "online",
-        });
-
-        for (const identity of normalized.identities) {
-          this.store.upsertIdentity(identity);
-          const trackerKey = `provider:${identity.provider}:${identity.identityId}`;
-          const stored = this.store.getProviderTracker(trackerKey);
-          const level = stored ? providerIncidentLevel(stored) : "none";
-          const previous: EventProviderTrackerState | null = stored ? {
-            identityId: stored.identityId,
-            provider: stored.provider,
-            lastHealth: stored.health,
-            consecutiveFailures: stored.consecutiveFailures,
-            consecutiveBlocked: stored.consecutiveBlocked,
-            consecutiveDisabled: stored.consecutiveDisabled,
-            incidentId: level === "none" ? null : `${trackerKey}:${stored.incidentEpoch}`,
-            incidentLevel: level,
-            incidentEpoch: stored.incidentEpoch,
-            lastObservedAt: stored.lastObservedAt,
-          } : null;
-          const transition = evaluateProviderTransition(previous, identity);
-          const next = transition.nextState;
-          this.store.upsertProviderTracker({
-            trackerKey,
-            identityId: next.identityId,
-            provider: next.provider,
-            sourceHostId: identity.sourceHostId,
-            lastObservedAt: next.lastObservedAt,
-            health: next.lastHealth,
-            consecutiveFailures: next.consecutiveFailures,
-            consecutiveBlocked: next.consecutiveBlocked,
-            consecutiveDisabled: next.consecutiveDisabled,
-            downIncidentActive: next.incidentLevel === "down",
-            blockedIncidentActive: next.incidentLevel === "blocked",
-            disabledIncidentActive: next.incidentLevel === "disabled",
-            cooldownIncidentActive: next.incidentLevel === "cooldown",
-            collectorFailureActive: false,
-            incidentEpoch: next.incidentEpoch,
-          });
-          for (const candidate of transition.events) emitted.push(this.recordEventCandidate(candidate));
-        }
-
-        for (const quota of normalized.quotas) {
-          const trackerKey = buildQuotaTrackerKey(quota);
-          const stored = this.store.getQuotaTracker(trackerKey);
-          const previous: EventQuotaTrackerState | null = stored ? {
-            trackerKey: stored.trackerKey,
-            identityId: stored.identityId,
-            provider: stored.provider,
-            bucketId: stored.bucketId,
-            windowId: stored.windowId,
-            meter: quota.meter,
-            model: quota.model,
-            tier: quota.tier,
-            generation: stored.generation,
-            warningArmEpoch: stored.warningArmEpoch,
-            criticalArmEpoch: stored.criticalArmEpoch,
-            exhaustedArmEpoch: stored.exhaustedArmEpoch,
-            creditChangeSeq: stored.creditChangeSequence,
-            lastObservedAt: stored.lastObservedAt,
-            lastUsedFraction: stored.lastUsedFraction,
-            lastRemainingFraction: stored.lastRemainingFraction ?? Math.max(0, 1 - stored.lastUsedFraction),
-            lastResetCredits: stored.lastResetCredits ?? null,
-            warningFired: stored.warningFired,
-            criticalFired: stored.criticalFired,
-            exhaustedFired: stored.exhaustedFired,
-          } : null;
-          const transition = evaluateQuotaTransition(previous, quota);
-          const next = transition.nextState;
-          this.store.recordQuotaObservation(quota);
-          this.store.upsertQuotaTracker({
-            trackerKey: next.trackerKey,
-            identityId: next.identityId,
-            provider: next.provider,
-            bucketId: next.bucketId,
-            windowId: next.windowId,
-            generation: next.generation,
-            lastObservedAt: next.lastObservedAt,
-            lastUsedFraction: next.lastUsedFraction,
-            lastRemainingFraction: next.lastRemainingFraction,
-            lastResetCredits: next.lastResetCredits,
-            warningFired: next.warningFired,
-            criticalFired: next.criticalFired,
-            exhaustedFired: next.exhaustedFired,
-            warningArmEpoch: next.warningArmEpoch,
-            criticalArmEpoch: next.criticalArmEpoch,
-            exhaustedArmEpoch: next.exhaustedArmEpoch,
-            creditChangeSequence: next.creditChangeSeq,
-            consecutiveFailures: stored?.consecutiveFailures ?? 0,
-            failureAlertSent: stored?.failureAlertSent ?? false,
-            lastResetAt: transition.resetConfirmed ? next.lastObservedAt : stored?.lastResetAt,
-            lastNotifiedResetAt: stored?.lastNotifiedResetAt,
-          });
-          for (const candidate of transition.events) emitted.push(this.recordEventCandidate(candidate));
-        }
+        },
+        identities: normalized.identities,
+        quotas: normalized.quotas,
       });
-
-      for (const event of emitted) this.broadcast(event);
       this.lastProbeStatus = "ok";
       this.lastProbeError = null;
       this.consecutiveProbeFailures = 0;
-      await this.deliveryManagerInternal.processOutboxOnce();
     } catch (error) {
       const safeError = sanitizeOmpUsageError(error);
       this.lastProbeStatus = "error";

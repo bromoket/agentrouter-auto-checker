@@ -11,6 +11,8 @@ import {
 import type { AppConfig } from "./config";
 import { loadConfig } from "./config";
 import { CheckCoordinator } from "./coordinator";
+import { AntigravityCollector } from "./antigravity/collector";
+import { AntigravityStore } from "./antigravity/store";
 import { startDashboard } from "./dashboard";
 import { ObservatoryCoordinator } from "./observatory/coordinator";
 import { ObservatoryStore } from "./observatory/store";
@@ -122,6 +124,45 @@ async function main(): Promise<void> {
     console.log("observatory: enabled with separate durable storage");
   }
 
+  let antigravityStore: AntigravityStore | null = null;
+  let antigravityCollector: AntigravityCollector | null = null;
+  if (config.antigravity.enabled && observatoryCoordinator && config.antigravity.encryptionKey) {
+    antigravityStore = new AntigravityStore(config.antigravity.dbPath, config.antigravity.encryptionKey);
+    antigravityCollector = new AntigravityCollector({
+      store: antigravityStore,
+      sink: {
+        ingestBatch: async (observedAt, identities, quotas) => {
+          await observatoryCoordinator.ingestBatch({
+            observedAt,
+            host: {
+              hostId: config.observatory.sourceHostId,
+              operatorLabel: "AgentRouter Local Node",
+              platform: process.platform,
+              collectorVersion: "antigravity-direct",
+              lastSeenAt: observedAt,
+              status: "online",
+            },
+            identities,
+            quotas,
+          });
+        },
+        emitEvent: (candidate) => {
+          observatoryCoordinator.processEventCandidate(candidate);
+        },
+      },
+      oauth: {
+        clientId: config.antigravity.oauthClientId,
+        clientSecret: config.antigravity.oauthClientSecret,
+        redirectUri: config.antigravity.oauthRedirectUri,
+      },
+      probeIntervalMs: config.antigravity.probeIntervalMinutes * 60_000,
+      probeTimeoutMs: config.antigravity.probeTimeoutMs,
+      catalogIntervalMs: config.antigravity.catalogIntervalMinutes * 60_000,
+      sourceHostId: config.observatory.sourceHostId,
+    });
+    console.log("antigravity: direct account probing enabled");
+  }
+
   const retention = new ScreenshotRetentionManager({
     screenshotDir: config.screenshotDir,
   });
@@ -157,12 +198,17 @@ async function main(): Promise<void> {
     await coordinator.runCycle();
     store.close();
     observatoryStore?.close();
+    antigravityStore?.close();
     return;
   }
 
   const observatoryContext =
     observatoryStore && observatoryCoordinator
       ? { store: observatoryStore, coordinator: observatoryCoordinator }
+      : null;
+  const antigravityContext =
+    antigravityStore && antigravityCollector && config.antigravity.enabled
+      ? { store: antigravityStore, collector: antigravityCollector, config }
       : null;
   const collectorServer = config.collector.enabled && observatoryStore
     ? await startCollectorListener(config, observatoryStore)
@@ -180,7 +226,16 @@ async function main(): Promise<void> {
   if (telegram) {
     console.log("telegram: interactive command listener active (/status, /quotas, /balance, /dashboard)");
   }
-  const server = startDashboard(store, accounts, settings, challenges, coordinator, config, observatoryContext);
+  const server = startDashboard(
+    store,
+    accounts,
+    settings,
+    challenges,
+    coordinator,
+    config,
+    observatoryContext,
+    antigravityContext,
+  );
   console.log(`dashboard: ${server.url}`);
   const automation = await settings.load();
   if (automation.openDashboardOnStart) {
@@ -196,11 +251,13 @@ async function main(): Promise<void> {
     if (closing) return;
     closing = true;
     coordinator.stopScheduler();
+    antigravityCollector?.stop();
     await stopTelegramCommands?.();
     collectorServer?.close();
     server.stop(true);
     await retention.close();
     observatoryStore?.close();
+    antigravityStore?.close();
     store.close();
   };
   process.once("SIGINT", () => void shutdown());
@@ -213,6 +270,7 @@ async function main(): Promise<void> {
   }
 
   coordinator.startScheduler();
+  antigravityCollector?.start();
   retention.startScheduler();
   console.log("scheduler: active");
 }

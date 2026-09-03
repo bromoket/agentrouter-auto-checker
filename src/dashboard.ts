@@ -6,8 +6,10 @@ import { AccountStore } from "./accounts";
 import { isBoundedJsonError, readBoundedJsonObject } from "./bounded-json";
 import { AuthenticationChallengeBroker } from "./challenges";
 import type { AppConfig } from "./config";
+import { handleAntigravityApi } from "./antigravity/api";
 import { CheckCoordinator } from "./coordinator";
 import { handleObservatoryApi } from "./observatory/api";
+import type { AntigravityApiContext } from "./antigravity/api";
 import type { ObservatoryCoordinator } from "./observatory/coordinator";
 import type { ObservatoryStore } from "./observatory/store";
 import {
@@ -148,6 +150,7 @@ export function startDashboard(
     store: ObservatoryStore;
     coordinator: ObservatoryCoordinator;
   } | null,
+  antigravityContext?: AntigravityApiContext | null,
 ) {
   if (config.observatory.enabled && !config.dashboardAuth.enabled) {
     throw new Error("Observatory dashboard requires enabled API key session authentication.");
@@ -247,6 +250,16 @@ export function startDashboard(
             return observatoryResponse;
           }
           return errorResponse("Observatory API route not found.", 404);
+        }
+        if (url.pathname.startsWith("/api/antigravity/")) {
+          if (!antigravityContext) {
+            return errorResponse("Antigravity direct probing is disabled.", 404);
+          }
+          const antigravityResponse = await handleAntigravityApi(request, url, method, antigravityContext);
+          if (antigravityResponse) {
+            return antigravityResponse;
+          }
+          return errorResponse("Antigravity API route not found.", 404);
         }
         if (method === "GET" && url.pathname === "/dashboard.css") {
           return serveFile(join(WEB_ROOT, "dashboard.css"));

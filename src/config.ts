@@ -1,6 +1,10 @@
 import { isIP } from "node:net";
 import { hostname } from "node:os";
 import { isAbsolute } from "node:path";
+import {
+  ANTIGRAVITY_CLIENT_ID,
+  ANTIGRAVITY_REDIRECT_URI,
+} from "./antigravity/constants";
 import { createDashboardAuth, type DashboardAuth } from "./dashboard-auth";
 
 export interface AppConfig {
@@ -23,6 +27,7 @@ export interface AppConfig {
   telegram: TelegramConfig;
   ompQuota: OmpQuotaConfig;
   observatory: ObservatoryConfig;
+  antigravity: AntigravityConfig;
   collector: CollectorConfig;
   dashboardAuth: DashboardAuth;
 }
@@ -52,6 +57,18 @@ export interface ObservatoryConfig {
   maxAccountsPerProvider: number;
   perAccountTimeoutMs: number;
   ompTimeoutMs: number;
+}
+
+export interface AntigravityConfig {
+  enabled: boolean;
+  dbPath: string;
+  encryptionKey: string | null;
+  probeIntervalMinutes: number;
+  probeTimeoutMs: number;
+  catalogIntervalMinutes: number;
+  oauthClientId: string;
+  oauthClientSecret: string | null;
+  oauthRedirectUri: string;
 }
 
 export interface OmpQuotaConfig {
@@ -428,6 +445,50 @@ function loadObservatoryConfig(
   };
 }
 
+function loadAntigravityConfig(
+  dataDir: string,
+  observatory: ObservatoryConfig,
+  agentRouterDbPath: string,
+): AntigravityConfig {
+  const enabled = parseBoolean("ANTIGRAVITY_ENABLED", false);
+  const rawDbPath = process.env.ANTIGRAVITY_DB_PATH?.trim();
+  const dbPath = rawDbPath || dataDir + "/antigravity.sqlite";
+  const encryptionKey = process.env.ANTIGRAVITY_ENC_KEY?.trim() || null;
+  const oauthClientSecret = process.env.ANTIGRAVITY_OAUTH_CLIENT_SECRET?.trim() || null;
+  if (enabled) {
+    if (!observatory.enabled) {
+      throw new Error("Antigravity direct probing requires Observatory to be enabled.");
+    }
+    if (!encryptionKey) {
+      throw new Error("ANTIGRAVITY_ENC_KEY is required when Antigravity direct probing is enabled.");
+    }
+    if (!(Buffer.byteLength(encryptionKey, "utf8") >= 32)) {
+      throw new Error("ANTIGRAVITY_ENC_KEY must be at least 32 bytes (or use base64: prefix with a 32-byte key).");
+    }
+    if (!oauthClientSecret) {
+      throw new Error("ANTIGRAVITY_OAUTH_CLIENT_SECRET is required when Antigravity direct probing is enabled.");
+    }
+    if (dbPath !== ":memory:") {
+      if (dbPath === observatory.dbPath) {
+        throw new Error("ANTIGRAVITY_DB_PATH must be separate from OBSERVATORY_DB_PATH.");
+      }
+      if (dbPath === agentRouterDbPath) {
+        throw new Error("ANTIGRAVITY_DB_PATH must be separate from the AgentRouter DB path.");
+      }
+    }
+  }
+  return {
+    enabled,
+    dbPath,
+    encryptionKey,
+    probeIntervalMinutes: parseBoundedInteger("ANTIGRAVITY_PROBE_INTERVAL_MINUTES", 5, 1, 1440),
+    probeTimeoutMs: parseBoundedInteger("ANTIGRAVITY_PROBE_TIMEOUT_MS", 30_000, 1_000, 120_000),
+    catalogIntervalMinutes: parseBoundedInteger("ANTIGRAVITY_CATALOG_INTERVAL_MINUTES", 60, 5, 1440),
+    oauthClientId: process.env.ANTIGRAVITY_OAUTH_CLIENT_ID?.trim() || ANTIGRAVITY_CLIENT_ID,
+    oauthClientSecret,
+    oauthRedirectUri: process.env.ANTIGRAVITY_OAUTH_REDIRECT_URI?.trim() || ANTIGRAVITY_REDIRECT_URI,
+  };
+}
 export function loadConfig(): AppConfig {
   const dataDir = process.env.DATA_DIR?.trim() || "data";
   const dashboardPort = parsePositiveInteger("DASHBOARD_PORT", 3100);
@@ -440,6 +501,7 @@ export function loadConfig(): AppConfig {
   const dbPath = process.env.DB_PATH?.trim() || `${dataDir}/checks.sqlite`;
   const ompQuota = loadOmpQuotaConfig(dataDir);
   const observatory = loadObservatoryConfig(dataDir, ompQuota, dbPath);
+  const antigravity = loadAntigravityConfig(dataDir, observatory, dbPath);
   const collector = loadCollectorConfig();
   if (collector.enabled && !observatory.enabled) {
     throw new Error("Collector ingestion requires Observatory to be enabled with its separate database.");
@@ -484,6 +546,7 @@ export function loadConfig(): AppConfig {
     telegram: loadTelegramConfig(dataDir, dashboardHost, dashboardPort),
     ompQuota,
     observatory,
+    antigravity,
     collector,
     dashboardAuth,
   };

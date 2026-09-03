@@ -9,8 +9,10 @@
     <title>AI Fleet Observatory</title>
     <script src="/observatory/canonical.js"></script>
     <link rel="stylesheet" href="./dashboard.css">
+    <link rel="stylesheet" href="./antigravity.css">
     <script src="./vendor/chart.umd.js" defer></script>
     <script src="./dashboard.js" defer></script>
+    <script src="./antigravity.js" defer></script>
   </head>
   <body>
     <a class="skip-link" href="#main-content">Skip to observatory content</a>
@@ -53,6 +55,10 @@
             <span class="nav-icon">Q</span>
             <span><strong>Provider Quotas</strong><small>Utilization & limits</small></span>
             <b id="quotas-health" class="health-dot neutral" aria-hidden="true"></b>
+          </button>
+          <button id="nav-antigravity" class="nav-card" type="button" data-view="antigravity" aria-label="Antigravity Direct view">
+            <span class="nav-icon">A</span>
+            <span><strong>Antigravity</strong><small>Direct account probes</small></span>
           </button>
           <button id="nav-accounts" class="nav-card" type="button" data-view="accounts" aria-label="AgentRouter Accounts view">
             <span class="nav-icon">AR</span>
@@ -265,6 +271,45 @@
             </header>
             <div id="quotas-container" class="quotas-grid"></div>
           </section>
+        </div>
+
+        <!-- VIEW 2b: ANTIGRAVITY DIRECT -->
+        <div id="antigravity-view" class="view-panel hidden">
+          <section class="view-header glass">
+            <div>
+              <p class="eyebrow">DIRECT ACCOUNT PROBES</p>
+              <h1>Antigravity</h1>
+              <p class="muted">Google Antigravity OAuth accounts probed directly through the same Cloud Code Assist endpoints the Antigravity IDE uses — WTUS pools per model family plus the Gemini CLI REQUESTS meter. Fingerprints and tokens stay encrypted on the server.</p>
+            </div>
+            <div class="view-actions">
+              <button id="ag-probe-all" class="btn ghost" type="button">Probe all now</button>
+              <button id="ag-add-open" class="btn primary" type="button">Add Antigravity account</button>
+            </div>
+          </section>
+
+          <section id="ag-status-strip" class="panel glass" hidden></section>
+
+          <section id="ag-oauth-panel" class="panel glass hidden">
+            <header class="panel-heading">
+              <div>
+                <p class="eyebrow">GOOGLE OAUTH · PKCE</p>
+                <h2>Add an Antigravity account</h2>
+                <p class="muted">Open the consent URL in your browser, approve with the Google account you use for Antigravity, then copy the full redirect URL from the address bar (it contains the one-time code) and paste it below. The exchange happens on the server; the refresh token is stored encrypted.</p>
+              </div>
+            </header>
+            <div class="ag-actions">
+              <button id="ag-oauth-start" class="btn primary" type="button">Open Google consent</button>
+              <a id="ag-oauth-url" href="#" target="_blank" rel="noopener" hidden>Open consent page</a>
+              <button id="ag-oauth-cancel" class="btn ghost" type="button">Cancel</button>
+            </div>
+            <div class="field-row">
+              <input id="ag-oauth-redirect" type="text" autocomplete="off" spellcheck="false" placeholder="http://localhost:51121/oauth-callback?code=...&amp;state=..." aria-label="Redirect URL after consent" />
+              <button id="ag-oauth-submit" class="btn primary" type="button">Finish adding</button>
+            </div>
+            <p id="ag-oauth-msg" class="muted" style="margin-top:8px"></p>
+          </section>
+
+          <div id="ag-accounts" class="dashboard-grid"></div>
         </div>
 
         <!-- VIEW 3: PROVIDER CREDENTIALS -->

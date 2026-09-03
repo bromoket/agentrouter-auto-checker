@@ -37,6 +37,17 @@ function createTestConfig(directory: string, ompQuotaEnabled = false, observator
     accountFilePath: join(directory, "accounts.json"),
     settingsFilePath: join(directory, "settings.json"),
     dbPath: ":memory:",
+    antigravity: {
+      enabled: false,
+      dbPath: ":memory:",
+      encryptionKey: null,
+      probeIntervalMinutes: 5,
+      probeTimeoutMs: 30_000,
+      catalogIntervalMinutes: 60,
+      oauthClientId: "test-client-id",
+      oauthClientSecret: null,
+      oauthRedirectUri: "http://localhost:51121/oauth-callback",
+    },
     maxRecentRuns: 500,
     disableWebAuthn: true,
     telegram: {
