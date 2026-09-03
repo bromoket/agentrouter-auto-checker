@@ -5,7 +5,16 @@
   const byId = (id) => document.getElementById(id);
   const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 
-  const API = "/api/antigravity";
+  // Mirror dashboard.js mount detection: pages live under /observatory/ (session cookie
+  // is Path=/observatory/), so API calls must be prefixed with that mount.
+  const AG_BASE_PATH = (() => {
+    const path = window.location.pathname;
+    if (path.endsWith("/dashboard.html") || path.endsWith("/index.html") || path.endsWith("/login.html")) {
+      return path.slice(0, path.lastIndexOf("/") + 1);
+    }
+    return `${path.replace(/\/+$/, "")}/`;
+  })();
+  const API = `${AG_BASE_PATH}api/antigravity`;
   const POOL_LABEL = {
     gemini: "Gemini pool",
     "claude-gpt": "Claude + GPT",
