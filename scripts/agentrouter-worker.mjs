@@ -1626,7 +1626,7 @@ async function runWorker({ account, config }) {
         "A stale AgentRouter session was found; logging it out before starting this cycle.",
         17,
       );
-      const staleLogout = await logoutAndPersist(
+      let staleLogout = await logoutAndPersist(
         context,
         activePage,
         config,
@@ -1635,6 +1635,20 @@ async function runWorker({ account, config }) {
         result.apiCalls,
       );
       if (!staleLogout) {
+        // Transient WAF or navigation races can fail the first confirm.
+        log(`[${account.label}] preflight logout did not confirm; retrying once.`);
+        await wait(2_500);
+        staleLogout = await logoutAndPersist(
+          context,
+          activePage,
+          config,
+          staleAgentRouterUser.id,
+          statePath,
+          result.apiCalls,
+        );
+      }
+      if (!staleLogout) {
+        log(`[${account.label}] preflight logout failed after retry on ${new URL(activePage.url()).pathname}`);
         throw new Error("Unable to clear the stale AgentRouter session before login.");
       }
       preflightLoggedOut = true;

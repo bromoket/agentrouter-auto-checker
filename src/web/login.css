@@ -183,6 +183,57 @@ input:focus-visible {
   25% { transform: translateX(-5px); }
   75% { transform: translateX(5px); }
 }
+/* Ambient scene */
+body {
+  position: relative;
+  overflow: hidden;
+}
+body::before,
+body::after {
+  content: "";
+  position: fixed;
+  z-index: 0;
+  border-radius: 50%;
+  filter: blur(70px);
+  pointer-events: none;
+}
+body::before {
+  width: 46vmax;
+  height: 46vmax;
+  top: -18vmax;
+  left: -12vmax;
+  background: radial-gradient(circle, rgba(139, 92, 246, 0.34), transparent 65%);
+  animation: orb-drift-a 16s ease-in-out infinite alternate;
+}
+body::after {
+  width: 40vmax;
+  height: 40vmax;
+  right: -14vmax;
+  bottom: -16vmax;
+  background: radial-gradient(circle, rgba(232, 121, 249, 0.22), transparent 65%);
+  animation: orb-drift-b 20s ease-in-out infinite alternate;
+}
+@keyframes orb-drift-a {
+  from { transform: translate(0, 0) scale(1); }
+  to { transform: translate(7vmax, 4vmax) scale(1.12); }
+}
+@keyframes orb-drift-b {
+  from { transform: translate(0, 0) scale(1.05); }
+  to { transform: translate(-6vmax, -5vmax) scale(0.95); }
+}
+.card {
+  z-index: 1;
+}
+.card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow), 0 30px 90px rgba(10, 5, 24, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.09);
+}
+h1 {
+  background: linear-gradient(120deg, #f0eef5, #e9d5ff 55%, #d8b4fe);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.01ms !important;

@@ -61,7 +61,12 @@
       const data = await res.json().catch(function () {
         return {};
       });
-      showError(data.error || "Authentication failed.");
+      const message = data.error || "Authentication failed.";
+      showError(
+        message === "Invalid API key."
+          ? message + "\nGet the current key from the owner Telegram bot with /key."
+          : message,
+      );
       keyInput.focus();
     } catch (err) {
       showError("Network error. Please try again.");
