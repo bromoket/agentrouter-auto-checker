@@ -267,6 +267,12 @@ export function startDashboard(
         if (method === "GET" && url.pathname === "/dashboard.js") {
           return serveFile(join(WEB_ROOT, "dashboard.js"));
         }
+        if (method === "GET" && url.pathname === "/antigravity.css") {
+          return serveFile(join(WEB_ROOT, "antigravity.css"));
+        }
+        if (method === "GET" && url.pathname === "/antigravity.js") {
+          return serveFile(join(WEB_ROOT, "antigravity.js"));
+        }
         if (method === "GET" && url.pathname === "/vendor/chart.umd.js") {
           return serveFile(CHART_BUNDLE);
         }
