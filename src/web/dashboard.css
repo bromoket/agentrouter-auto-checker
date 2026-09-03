@@ -513,8 +513,15 @@ td.meta-cell { white-space: normal; min-width: 180px; }
 .health-ring:hover { filter: brightness(1.12); }
 
 /* Top navigation shell */
-.app-shell { grid-template-columns: 1fr; gap: 18px; padding-top: 14px; }
-.topbar { grid-template-areas: "brand center actions" "sub sub sub"; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); row-gap: 6px; }
+.app-shell { grid-template-columns: 1fr; gap: 16px; padding-top: 10px; }
+.topbar { min-height: 0; grid-template-areas: "brand center actions" "sub sub sub"; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); grid-template-rows: 46px auto; row-gap: 2px; padding: 4px clamp(12px, 2vw, 24px) 0; }
+.topbar .brand-mark { width: 32px; height: 32px; border-radius: 10px; }
+.topbar .brand strong { font-size: 16px; }
+.topbar .brand small { font-size: 7px; }
+.topbar .status-chip { padding: 5px 9px; font-size: 11px; }
+.topbar .button { min-height: 32px; padding: 0 11px; font-size: 12px; }
+.topbar .button.icon-only { width: 32px; }
+
 .brand { grid-area: brand; }
 .brand-mark svg { width: 60%; height: 60%; display: block; filter: drop-shadow(0 0 8px rgba(232, 121, 249, 0.4)); }
 .brand-mark::after { display: none; }
@@ -544,8 +551,10 @@ td.meta-cell { white-space: normal; min-width: 180px; }
 .topbar-quick .onboarding p { display: none; }
 .topbar-quick .onboarding .button { min-height: 26px; padding: 0 10px; font-size: 11px; border-radius: 999px; }
 .workspace { min-width: 0; }
-.topbar { min-height: 0; padding-top: 8px; padding-bottom: 0; row-gap: 2px; }
-.hero { min-height: 0; align-items: center; grid-template-columns: 1.6fr 0.4fr; padding: 16px clamp(18px, 2vw, 26px); }
+
+.hero { min-height: 0; align-items: center; grid-template-columns: 1.6fr 0.4fr; padding: 12px clamp(16px, 2vw, 24px); }
+.hero .eyebrow { margin-bottom: 2px; }
+.hero h1 { margin: 0; }
 .hero h1 { font-size: clamp(21px, 2vw, 30px); line-height: 1.02; }
 .hero-copy > p:not(.eyebrow) { max-width: 540px; font-size: 12.5px; line-height: 1.5; margin-top: 6px; }
 .hero-actions { margin-top: 12px; }
