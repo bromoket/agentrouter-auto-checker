@@ -202,6 +202,9 @@ export function startDashboard(
         if (method === "GET" && url.pathname === "/login.js") {
           return serveFile(join(WEB_ROOT, "login.js"));
         }
+        if (method === "GET" && url.pathname === "/canonical.js") {
+          return serveFile(join(WEB_ROOT, "canonical.js"));
+        }
 
         const isAuthenticated = config.dashboardAuth.verifyRequest(request);
 
