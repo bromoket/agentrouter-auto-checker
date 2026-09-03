@@ -1163,7 +1163,7 @@ function renderProviderAccountOverview() {
     remainingStat.append(element("span", null, "Remaining"), element("strong", null, remText));
 
     const reset = element("div", "entity-stat");
-    const resetEl = element("strong", null, worst?.resetsAt ? formatRelative(worst.resetsAt) : "Unavailable");
+    const resetEl = element("strong", null, worst ? resetCopy(worst, used) : "Unavailable");
     if (worst?.resetsAt) {
       resetEl.title = formatDate(worst.resetsAt, true);
     }
@@ -1195,9 +1195,44 @@ function renderQuotaSummary(items) {
   );
 }
 
-function createQuotaRow(item, rowLabel) {
+function windowPeriodMinutes(item) {
+  if (item.windowDurationMs && Number.isFinite(item.windowDurationMs) && item.windowDurationMs > 0) {
+    return Math.round(item.windowDurationMs / 60_000);
+  }
+  const wid = String(item.windowId || "").toLowerCase();
+  if (wid === "5h" || wid.includes("5h")) return 300;
+  if (wid === "7d" || wid === "weekly") return 10_080;
+  if (wid === "daily") return 1_440;
+  return 0;
+}
+function humanPeriod(minutes) {
+  const m = Math.max(1, Math.round(minutes));
+  if (m < 90) return `${m}m`;
+  if (m < 2_880) return `${Math.round(m / 60)}h`;
+  return `${Math.round(m / 1_440)}d`;
+}
+function resetCopy(item, usedFraction) {
+  if (!item || !item.resetsAt) {
+    return item && item.resetLabel ? safeLabel(item.resetLabel) : "No scheduled reset";
+  }
+  const target = Date.parse(item.resetsAt);
+  if (!Number.isFinite(target)) return "Reset unavailable";
+  const diffMs = target - Date.now();
+  const used = usedFraction ?? numericOrNull(item.usedFraction) ?? 0;
+  if (diffMs <= 0) {
+    const overdueMin = Math.max(1, Math.round(Math.abs(diffMs) / 60_000));
+    if (used >= 0.98) {
+      return `Overdue ${humanPeriod(overdueMin)} · reset pending`;
+    }
+    return `Rolled ${humanPeriod(overdueMin)} ago`;
+  }
+  if (diffMs < 60_000) return "Resets any moment";
+  return `Resets in ${humanPeriod(diffMs / 60_000)}`;
+}
+
+function createQuotaRow(item, rowLabel, options = {}) {
   const status = quotaStatus(item);
-  const row = element("div", `quota-row ${statusClass(status)}`);
+  const row = element("div", `quota-row ${options.primary ? "quota-row-primary " : ""}${options.compact ? "quota-row-compact " : ""}${statusClass(status)}`);
   const header = element("div", "quota-row-header");
   const labelEl = element("span", "quota-row-label", rowLabel);
   const used = numericOrNull(item.usedFraction);
@@ -1215,21 +1250,24 @@ function createQuotaRow(item, rowLabel) {
 
   const meta = element("div", "quota-row-meta");
   let remDisplay = "Unavailable";
+  const unit = String(item.unit || "").toLowerCase();
   if (Number.isFinite(Number(item.remainingFraction))) {
     const remPct = `${Math.round(Number(item.remainingFraction) * 100)}%`;
-    if (item.remainingUnits !== null && item.remainingUnits !== undefined) {
+    if (unit === "percent") {
+      remDisplay = `${remPct} remaining`;
+    } else if (item.remainingUnits !== null && item.remainingUnits !== undefined) {
       remDisplay = `${remPct} (${formatCompact(item.remainingUnits)} ${item.unit || "units"})`;
     } else {
       remDisplay = `${remPct} remaining`;
     }
-  } else if (item.remainingUnits !== null && item.remainingUnits !== undefined) {
+  } else if (item.remainingUnits !== null && item.remainingUnits !== undefined && unit !== "percent") {
     remDisplay = `${formatCompact(item.remainingUnits)} ${item.unit || "units"}`;
   } else if (used !== null) {
     remDisplay = `${Math.max(0, Math.round((1 - used) * 100))}% remaining`;
   }
   const remSpan = element("span", "quota-row-remaining", remDisplay);
 
-  const resetDisplay = item.resetsAt ? `Resets ${formatRelative(item.resetsAt)}` : (item.resetLabel ? safeLabel(item.resetLabel) : "Reset unavailable");
+  const resetDisplay = resetCopy(item, used);
   const resetSpan = element("span", "quota-row-reset", resetDisplay);
   if (item.resetsAt) resetSpan.title = formatDate(item.resetsAt, true);
 
@@ -1295,9 +1333,10 @@ function renderQuotas() {
     const providerName = provider === "openai-codex" ? "OpenAI Codex" : provider === "google-antigravity" ? "Google Antigravity" : safeLabel(provider, "Provider");
     const safeIdentityLabel = identity?.label ? safeLabel(identity.label) : (identityId ? maskedIdentifier(identityId, "Identity") : "Global Quota Pool");
 
+    const shortIdentity = String(safeIdentityLabel).split("(")[0].trim() || safeIdentityLabel;
     copy.append(
-      element("h3", null, `${providerName} · ${safeIdentityLabel}`),
-      element("p", null, `${matchingWindows.length} tracked quota ${matchingWindows.length === 1 ? "window" : "windows"}`),
+      element("h3", null, shortIdentity),
+      element("p", null, `${providerName} · ${matchingWindows.length} tracked quota ${matchingWindows.length === 1 ? "window" : "windows"}`),
     );
 
     const badgesBox = element("div", "entity-badges");
@@ -1318,33 +1357,39 @@ function renderQuotas() {
     const isCodex = provider === "openai-codex" || providerLower.includes("codex") || providerLower.includes("openai");
     const isAntigravity = provider === "google-antigravity" || providerLower.includes("antigravity");
 
+    const windowSuffix = (w) => {
+      const wid = String(w.windowId || "").toLowerCase();
+      const short = { "5h": "5h", "7d": "7d", daily: "Daily", weekly: "Weekly" }[wid];
+      if (short) return short;
+      return safeLabel(w.resetLabel || w.windowLabel || wid, "window");
+    };
+    const bucketTier = (bucket) => {
+      if (bucket === "openai-codex:primary") return "Codex";
+      if (String(bucket || "").includes(":spark:primary")) return "Spark";
+      if (String(bucket || "").includes(":spark:secondary")) return "Spark";
+      return "";
+    };
+    const FAMILY_NAMES = { google: "Gemini", anthropic: "Claude", openai: "GPT" };
+
     if (isCodex) {
-      let win5h = null;
-      let win7d = null;
-      const extraCodexWindows = [];
-
-      for (const w of matchingWindows) {
-        const wid = String(w.windowId || "").toLowerCase();
-        const dur = w.windowDurationMs;
-        const label = String(w.resetLabel || w.windowLabel || "").toLowerCase();
-
-        if (!win5h && (wid === "5h" || dur === 18_000_000 || wid.includes("5h") || label.includes("5h") || label.includes("5 hour") || label.includes("5-hour"))) {
-          win5h = w;
-        } else if (!win7d && (wid === "7d" || wid === "weekly" || dur === 604_800_000 || wid.includes("7d") || label.includes("7d") || label.includes("7 day") || label.includes("7-day") || label.includes("weekly"))) {
-          win7d = w;
-        } else {
-          extraCodexWindows.push(w);
-        }
+      const bucketOrder = ["openai-codex:primary", "openai-codex:spark:primary", "openai-codex:spark:secondary"];
+      const codexRows = [...matchingWindows].sort((a, b) => {
+        const ai = bucketOrder.indexOf(String(a.bucketId || ""));
+        const bi = bucketOrder.indexOf(String(b.bucketId || ""));
+        return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
+      });
+      const primaryCodex = codexRows.find((w) => String(w.bucketId || "") === "openai-codex:primary");
+      const otherCodex = codexRows.filter((w) => w !== primaryCodex);
+      if (primaryCodex) {
+        rowsContainer.append(createQuotaRow(primaryCodex, "Codex \u00b7 7d", { primary: true }));
       }
-
-      if (win5h) {
-        rowsContainer.append(createQuotaRow(win5h, "5-Hour Window"));
-      }
-      if (win7d) {
-        rowsContainer.append(createQuotaRow(win7d, "7-Day Window"));
-      }
-      for (const extra of extraCodexWindows) {
-        rowsContainer.append(createQuotaRow(extra, safeLabel(extra.resetLabel || extra.windowLabel || extra.meter || extra.model || extra.windowId, "Quota window")));
+      for (const w of otherCodex) {
+        const tier = bucketTier(w.bucketId);
+        const isSparkSecondary = String(w.bucketId || "").includes(":spark:secondary");
+        const usedValue = numericOrNull(w.usedFraction) ?? 0;
+        // The duplicate Spark 7d row is shown only when it carries real usage.
+        if (isSparkSecondary && usedValue <= 0) continue;
+        rowsContainer.append(createQuotaRow(w, `${tier} \u00b7 ${windowSuffix(w)}`, { compact: true }));
       }
     } else if (isAntigravity) {
       const families = new Map();
@@ -1364,12 +1409,17 @@ function renderQuotas() {
           if (match) familyName = match[1];
         }
 
-        familyName = familyName.charAt(0).toUpperCase() + familyName.slice(1);
-        if (!families.has(familyName)) {
-          families.set(familyName, { daily: null, weekly: null, others: [] });
+        const familyKey = familyName.toLowerCase();
+        if (!families.has(familyKey)) {
+          families.set(familyKey, {
+            daily: null,
+            weekly: null,
+            others: [],
+            display: FAMILY_NAMES[familyKey] || (familyName.charAt(0).toUpperCase() + familyName.slice(1)),
+          });
         }
 
-        const fam = families.get(familyName);
+        const fam = families.get(familyKey);
         const wid = String(w.windowId || "").toLowerCase();
         const dur = w.windowDurationMs;
         const label = String(w.resetLabel || w.windowLabel || "").toLowerCase();
@@ -1383,15 +1433,16 @@ function renderQuotas() {
         }
       }
 
-      for (const [famName, famData] of families) {
-        if (famData.daily) {
-          rowsContainer.append(createQuotaRow(famData.daily, `${famName} (Daily)`));
-        }
+      for (const famData of families.values()) {
+        const display = famData.display;
         if (famData.weekly) {
-          rowsContainer.append(createQuotaRow(famData.weekly, `${famName} (Weekly)`));
+          rowsContainer.append(createQuotaRow(famData.weekly, `${display} \u00b7 Weekly`, { primary: true }));
+        }
+        if (famData.daily) {
+          rowsContainer.append(createQuotaRow(famData.daily, `${display} \u00b7 Daily`, { compact: true }));
         }
         for (const other of famData.others) {
-          rowsContainer.append(createQuotaRow(other, `${famName} · ${safeLabel(other.resetLabel || other.windowLabel || other.windowId, "Quota window")}`));
+          rowsContainer.append(createQuotaRow(other, `${display} \u00b7 ${windowSuffix(other)}`, { compact: true }));
         }
       }
     } else {
