@@ -1742,8 +1742,10 @@ async function runWorker({ account, config }) {
       consoleMetrics.statisticalCount,
       consoleMetrics.statisticalTokens,
     ].some((value) => Number.isFinite(value) && value > 0);
-    const walletHasRealMoney = walletMoneyValid && !(walletMetrics.balance === 0 && walletMetrics.consumed === 0);
-    const money = walletHasRealMoney ? walletMetrics : consoleMetrics;
+    // Console is the reliable money source (user-verified); /console/topup needs an extra
+    // refresh and is only used as a fallback when the console cards are missing/invalid.
+    const consoleHasRealMoney = consoleMoneyValid && !(consoleMetrics.balance === 0 && consoleMetrics.consumed === 0);
+    const money = consoleHasRealMoney ? consoleMetrics : walletMetrics;
     if (
       hasVisibleActivity &&
       Number.isFinite(money.balance) && money.balance === 0 &&
@@ -1774,7 +1776,7 @@ async function runWorker({ account, config }) {
       launchAttempts,
       visitedRoutes: ["/console/", "/console/topup"],
       moneyCollection: {
-        selectedSource: walletHasRealMoney ? "/console/topup" : "/console/",
+        selectedSource: consoleHasRealMoney ? "/console/" : "/console/topup",
         refreshPolicy: "refresh-up-to-three-times",
         console: consoleReading,
         wallet: walletReading,
