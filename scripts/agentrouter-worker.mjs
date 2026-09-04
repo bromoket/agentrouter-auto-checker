@@ -1816,7 +1816,16 @@ async function runWorker({ account, config }) {
         : consoleHasRealMoney
           ? "/console"
           : "/console/topup";
-    const finalMoney = (authMoney ?? apiMoney) ?? money;
+    const finalMoney = (authMoney ?? apiMoney) ?? (
+      consoleHasRealMoney
+        ? consoleMetrics
+        : walletMoneyValid
+          ? walletMetrics
+          : null
+    );
+    if (!finalMoney || !Number.isFinite(finalMoney.balance) || !Number.isFinite(finalMoney.consumed)) {
+      throw new Error("AgentRouter did not return authoritative or parseable balance/consumption values after settled reads.");
+    }
     const finalRequestCount = authMoney
       ? Math.round(authMoney.requestCount)
       : apiMoney
@@ -1828,9 +1837,10 @@ async function runWorker({ account, config }) {
       progress("money-api", `Authoritative balance from /api/user/self ($${finalMoney.balance.toFixed(2)} balance, $${finalMoney.consumed.toFixed(2)} consumed).`, 78);
     }
     if (
+      !authMoney && !apiMoney &&
       hasVisibleActivity &&
-      Number.isFinite(money.balance) && money.balance === 0 &&
-      Number.isFinite(money.consumed) && money.consumed === 0
+      finalMoney.balance === 0 &&
+      finalMoney.consumed === 0
     ) {
       throw new Error(
         `AgentRouter still showed $0.00 for both balance and consumption on the selected money source after ${consoleReading.refreshCount + 1} settled page load(s) while usage cards show activity; refusing to save false money values.`,

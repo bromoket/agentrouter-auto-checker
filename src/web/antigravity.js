@@ -182,7 +182,7 @@
       // text/bar-widths are patched, so nothing flickers or reorders.
       window.LiveKit.keyedMorph(grid, accounts, {
         key: (account) => account.id,
-        keyAttr: "agId",
+        keyAttr: "key",
         html: accountCard,
       });
     } else {
