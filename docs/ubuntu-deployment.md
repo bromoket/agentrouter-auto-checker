@@ -302,6 +302,70 @@ mount prefix before proxying; dashboard assets and API requests are therefore re
 to the mounted path. Confirm the status still lists both `/` and `/observatory/`
 handlers before proceeding.
 
+### Permanent staging noVNC access
+
+The noVNC endpoint is an administrative control surface for the authenticated browser used by
+the staging worker. Every identity allowed by the tailnet ACL can control that browser. x11vnc
+and websockify remain bound to IPv4 loopback; Tailscale Serve provides the only remote route.
+Never enable Funnel or bind either companion to a LAN, public, or wildcard address.
+
+Install the Ubuntu packages and versioned units:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y x11vnc novnc websockify
+sudo cp /opt/ai-fleet-observatory/deploy/ai-fleet-observatory.service /etc/systemd/system/
+sudo cp /opt/ai-fleet-observatory/deploy/ai-fleet-observatory-vnc.service /etc/systemd/system/
+sudo cp /opt/ai-fleet-observatory/deploy/ai-fleet-observatory-novnc.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable ai-fleet-observatory-vnc.service ai-fleet-observatory-novnc.service
+sudo systemctl restart ai-fleet-observatory.service
+sudo systemctl start ai-fleet-observatory-vnc.service ai-fleet-observatory-novnc.service
+```
+
+The main unit uses `Upholds=` to restore either companion while Observatory is active. This
+requires systemd 249 or newer; the staging Xeon runs systemd 255. Companion failure never
+propagates back to Observatory.
+
+Add the noVNC mount without replacing the existing handlers:
+
+```bash
+sudo tailscale serve --bg --yes --https=443 \
+  --set-path=/observatory-vnc/ http://127.0.0.1:6080
+sudo tailscale serve status --json
+```
+
+The Serve status MUST contain `/`, `/observatory/`, and `/observatory-vnc/`. Open:
+
+```text
+https://bkserver.tailbbaa91.ts.net/observatory-vnc/vnc.html?autoconnect=true&resize=scale&path=observatory-vnc/websockify
+```
+
+The explicit `path` query keeps the noVNC WebSocket request under the mounted Serve prefix.
+Verify the services and loopback-only listeners:
+
+```bash
+sudo ss -ltnp '( sport = :5900 or sport = :6080 )'
+systemctl --no-pager --full status \
+  ai-fleet-observatory.service \
+  ai-fleet-observatory-vnc.service \
+  ai-fleet-observatory-novnc.service
+```
+
+Only `127.0.0.1:5900` and `127.0.0.1:6080` are valid. To roll back, remove only this Serve
+path and disable only its companions:
+
+```bash
+sudo tailscale serve --yes --https=443 --set-path=/observatory-vnc/ off
+sudo systemctl disable --now \
+  ai-fleet-observatory-novnc.service \
+  ai-fleet-observatory-vnc.service
+sudo tailscale serve status --json
+```
+
+After rollback, `/` and `/observatory/` MUST remain present. Do not use `tailscale serve reset`
+or `tailscale serve clear`; either command would remove unrelated handlers.
+
 Collector HTTPS ingestion remains disabled until nginx TLS, the registered collector
 credentials, and Node IDs are provisioned. Configure the staging-only proxy with
 `deploy/ai-fleet-observatory.nginx.conf.example`: bind nginx to
