@@ -1798,11 +1798,33 @@ async function runWorker({ account, config }) {
     const money = consoleHasRealMoney ? consoleMetrics : walletMetrics;
     // Prefer the authoritative /api/user/self numbers (site money cards can show a gated
     // $0.00 until a manual refresh; the API is never gated this way).
-    const apiMoney = await readAuthoritativeMoneyPayload(context, config, authenticatedUserId);
-    const moneySource = apiMoney ? "api-user-self" : (consoleHasRealMoney ? "/console" : "/console/topup");
-    const finalMoney = apiMoney ?? money;
-    const finalRequestCount = apiMoney ? Math.round(apiMoney.requestCount) : consoleMetrics.requestCount;
-    if (apiMoney) {
+    // The post-OAuth user payload (authenticated.user) IS /api/user/self and already carries
+    // quota/used_quota — capture money from it before anything else can go stale or gated.
+    const authQuota = Number(authenticated?.user?.quota);
+    const authUsed = Number(authenticated?.user?.used_quota);
+    const authRequests = Number(authenticated?.user?.request_count);
+    const authMoney =
+      Number.isFinite(authQuota) && Number.isFinite(authUsed) && Number.isFinite(authRequests) &&
+      (authQuota > 0 || authUsed > 0 || authRequests > 0)
+        ? { balance: authQuota / 500_000, consumed: authUsed / 500_000, requestCount: authRequests }
+        : null;
+    const apiMoney = authMoney ?? await readAuthoritativeMoneyPayload(context, config, authenticatedUserId);
+    const moneySource = authMoney
+      ? "api-user-auth"
+      : apiMoney
+        ? "api-user-self"
+        : consoleHasRealMoney
+          ? "/console"
+          : "/console/topup";
+    const finalMoney = (authMoney ?? apiMoney) ?? money;
+    const finalRequestCount = authMoney
+      ? Math.round(authMoney.requestCount)
+      : apiMoney
+        ? Math.round(apiMoney.requestCount)
+        : consoleMetrics.requestCount;
+    if (authMoney) {
+      progress("money-api", `Authoritative balance from the authenticated user payload ($${finalMoney.balance.toFixed(2)} balance, $${finalMoney.consumed.toFixed(2)} consumed).`, 78);
+    } else if (apiMoney) {
       progress("money-api", `Authoritative balance from /api/user/self ($${finalMoney.balance.toFixed(2)} balance, $${finalMoney.consumed.toFixed(2)} consumed).`, 78);
     }
     if (
