@@ -76,6 +76,18 @@ describe("AgentRouter user identity", () => {
     expect(money.parseAgentRouterUserId(value)).toBe(expected);
   });
 
+  test("normalizes canonical string ids on returned user objects", () => {
+    expect(money.normalizeAgentRouterUser({ id: "296059", username: "github_296057" })).toEqual({
+      id: 296_059,
+      username: "github_296057",
+    });
+  });
+
+  test("rejects user objects with invalid ids", () => {
+    expect(money.normalizeAgentRouterUser({ id: true, username: "wrong" })).toBeNull();
+    expect(money.normalizeAgentRouterUser(null)).toBeNull();
+  });
+
   test.each([
     true,
     false,

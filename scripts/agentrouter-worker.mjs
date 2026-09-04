@@ -7,6 +7,7 @@ import path from "node:path";
 import { chromium } from "playwright";
 import {
   authoritativeMoneyFromUser,
+  normalizeAgentRouterUser,
   parseAgentRouterUserId,
   parseLabeledNumber,
 } from "./agentrouter-money.mjs";
@@ -344,11 +345,7 @@ async function readStoredUser(page) {
     })
     .catch(() => null);
 
-  if (!value || typeof value !== "object") {
-    return null;
-  }
-  const id = parseAgentRouterUserId(value.id);
-  return id === null ? null : { ...value, id };
+  return normalizeAgentRouterUser(value);
 }
 
 async function hasExpectedStoredUser(page, baseUrl, userId) {
@@ -461,12 +458,14 @@ async function collectAuthenticatedUser(request, baseUrl, timeoutMs, headers, ap
       );
     }
     const wrappedUser = response.data?.data;
-    const candidateUser = wrappedUser && typeof wrappedUser === "object"
-      ? wrappedUser
-      : response.data && typeof response.data === "object"
-        ? response.data
-        : null;
-    if (response.ok && candidateUser && parseAgentRouterUserId(candidateUser.id) !== null) {
+    const candidateUser = normalizeAgentRouterUser(
+      wrappedUser && typeof wrappedUser === "object"
+        ? wrappedUser
+        : response.data && typeof response.data === "object"
+          ? response.data
+          : null,
+    );
+    if (response.ok && candidateUser) {
       return candidateUser;
     }
     const dataType = response.data?.data === null
@@ -1810,17 +1809,6 @@ async function runWorker({ account, config }) {
       "AgentRouter Wallet",
     );
     const walletMetrics = walletReading.metrics;
-    const consoleMoneyValid = Number.isFinite(consoleMetrics.balance) && Number.isFinite(consoleMetrics.consumed);
-    const walletMoneyValid = Number.isFinite(walletMetrics.balance) && Number.isFinite(walletMetrics.consumed);
-    if (!consoleMoneyValid && !walletMoneyValid) {
-      const diagnostic = (metrics) =>
-        `balance=${Number.isFinite(metrics.balance) ? metrics.balance : "unparseable"}, ` +
-        `consumption=${Number.isFinite(metrics.consumed) ? metrics.consumed : "unparseable"}`;
-      throw new Error(
-        "AgentRouter's visible Console and Wallet cards did not expose parseable money values " +
-        `(Console: ${diagnostic(consoleMetrics)}; Wallet: ${diagnostic(walletMetrics)}).`,
-      );
-    }
     const requiredActivity = [
       consoleMetrics.requestCount,
       consoleMetrics.statisticalCount,

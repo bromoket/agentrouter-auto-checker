@@ -51,6 +51,12 @@ export function parseAgentRouterUserId(value) {
   return Number.isSafeInteger(parsed) ? parsed : null;
 }
 
+export function normalizeAgentRouterUser(user) {
+  if (!user || typeof user !== "object" || Array.isArray(user)) return null;
+  const id = parseAgentRouterUserId(user.id);
+  return id === null ? null : { ...user, id };
+}
+
 export function authoritativeMoneyFromUser(user, quotaPerUnit) {
   if (!user || typeof user !== "object" || Array.isArray(user)) return null;
   if (typeof quotaPerUnit !== "number" || !Number.isFinite(quotaPerUnit) || quotaPerUnit <= 0) return null;
