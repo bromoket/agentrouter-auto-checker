@@ -1440,6 +1440,36 @@ async function captureAgentRouterApiToken(page, config, userId, apiCalls) {
   return candidates[0]?.key.trim() || null;
 }
 
+
+// Authoritative money source: the console money cards render from /api/user/self but are
+// subject to the site's known "$0 until refresh" gating. Reading the API directly (same-origin
+// cookies, in-page fetch) returns quota/used_quota/request_count that map 1:1 to the displayed
+// $ amounts at quotaPerUnit. Only the derived numbers are used; the raw access_token in the
+// payload is never read, logged, or persisted.
+async function readAuthoritativeMoneyViaApi(page) {
+  try {
+    const payload = await page.evaluate(() =>
+      fetch("/api/user/self", { headers: { accept: "application/json" } })
+        .then((r) => r.json())
+        .catch(() => null),
+    );
+    const data = payload && payload.success === true && payload.data ? payload.data : null;
+    if (!data) return null;
+    const quota = Number(data.quota);
+    const used = Number(data.used_quota);
+    const requests = Number(data.request_count);
+    if (![quota, used, requests].every(Number.isFinite)) return null;
+    return {
+      balance: quota / 500_000,
+      consumed: used / 500_000,
+      requestCount: requests,
+      apiRequestCount: requests,
+    };
+  } catch {
+    return null;
+  }
+}
+
 async function logoutAndPersist(context, page, config, userId, statePath, apiCalls) {
   const started = Date.now();
   let redirectedToLogin = false;
@@ -1746,6 +1776,15 @@ async function runWorker({ account, config }) {
     // refresh and is only used as a fallback when the console cards are missing/invalid.
     const consoleHasRealMoney = consoleMoneyValid && !(consoleMetrics.balance === 0 && consoleMetrics.consumed === 0);
     const money = consoleHasRealMoney ? consoleMetrics : walletMetrics;
+    // Prefer the authoritative /api/user/self numbers (site money cards can show a gated
+    // $0.00 until a manual refresh; the API is never gated this way).
+    const apiMoney = await readAuthoritativeMoneyViaApi(page);
+    const moneySource = apiMoney ? "api-user-self" : (consoleHasRealMoney ? "/console" : "/console/topup");
+    const finalMoney = apiMoney ?? money;
+    const finalRequestCount = apiMoney ? Math.round(apiMoney.requestCount) : consoleMetrics.requestCount;
+    if (apiMoney) {
+      progress("money-api", `Authoritative balance from /api/user/self ($${finalMoney.balance.toFixed(2)} balance, $${finalMoney.consumed.toFixed(2)} consumed).`, 78);
+    }
     if (
       hasVisibleActivity &&
       Number.isFinite(money.balance) && money.balance === 0 &&
@@ -1761,9 +1800,9 @@ async function runWorker({ account, config }) {
         ? authenticated.user.username
         : undefined,
       quotaPerUnit: 500_000,
-      balance: money.balance,
-      consumed: money.consumed,
-      requestCount: consoleMetrics.requestCount,
+      balance: finalMoney.balance,
+      consumed: finalMoney.consumed,
+      requestCount: finalRequestCount,
       statisticalCount: consoleMetrics.statisticalCount,
       statisticalTokens: consoleMetrics.statisticalTokens,
       statisticalQuota: consoleMetrics.statisticalQuota,
@@ -1776,7 +1815,8 @@ async function runWorker({ account, config }) {
       launchAttempts,
       visitedRoutes: ["/console/", "/console/topup"],
       moneyCollection: {
-        selectedSource: consoleHasRealMoney ? "/console/" : "/console/topup",
+        selectedSource: moneySource,
+        authoritativeSource: moneySource,
         refreshPolicy: "refresh-up-to-three-times",
         console: consoleReading,
         wallet: walletReading,
