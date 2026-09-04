@@ -5,7 +5,11 @@ import { randomUUID } from "node:crypto";
 import { createInterface } from "node:readline";
 import path from "node:path";
 import { chromium } from "playwright";
-import { parseLabeledNumber } from "./agentrouter-money.mjs";
+import {
+  authoritativeMoneyFromUser,
+  parseAgentRouterUserId,
+  parseLabeledNumber,
+} from "./agentrouter-money.mjs";
 
 const USAGE_WINDOWS = [
   { granularity: "hour", seconds: 24 * 60 * 60 },
@@ -343,11 +347,8 @@ async function readStoredUser(page) {
   if (!value || typeof value !== "object") {
     return null;
   }
-  const id = Number(value.id);
-  if (!Number.isSafeInteger(id) || id <= 0) {
-    return null;
-  }
-  return { ...value, id };
+  const id = parseAgentRouterUserId(value.id);
+  return id === null ? null : { ...value, id };
 }
 
 async function hasExpectedStoredUser(page, baseUrl, userId) {
@@ -465,7 +466,7 @@ async function collectAuthenticatedUser(request, baseUrl, timeoutMs, headers, ap
       : response.data && typeof response.data === "object"
         ? response.data
         : null;
-    if (response.ok && candidateUser && Number.isSafeInteger(Number(candidateUser.id)) && Number(candidateUser.id) > 0) {
+    if (response.ok && candidateUser && parseAgentRouterUserId(candidateUser.id) !== null) {
       return candidateUser;
     }
     const dataType = response.data?.data === null
@@ -1194,57 +1195,88 @@ async function completeAgentRouterAccessVerification(context, page, account, con
   }
 
   const verificationPage = await context.newPage();
-  await verificationPage.setExtraHTTPHeaders(apiHeaders(userId));
-  await verificationPage.goto(`${config.baseUrl}/api/user/self`, {
-    waitUntil: "domcontentloaded",
-    timeout: config.requestTimeoutMs,
-  });
+  const started = Date.now();
+  let verificationCall = null;
+  let workerChallengeId = null;
+  const recoverVerificationCalls = () => {
+    for (const call of apiCalls) {
+      if (call.path === "/api/user/self" && !call.ok && call.contentType?.toLowerCase().includes("text/html")) {
+        call.recovered = true;
+      }
+    }
+  };
 
-  const immediatePayload = await readTopLevelJson(verificationPage);
-  if (immediatePayload?.success === true && immediatePayload.data?.id) {
-    await verificationPage.close().catch(() => undefined);
-    return;
-  }
-
-  const challengeText = (await verificationPage.locator("body").innerText().catch(() => "")).toLowerCase();
-  const challengeTitle = (await verificationPage.title().catch(() => "")).toLowerCase();
-  if (!challengeText.includes("access verification") && !challengeText.includes("slide to verify") && challengeTitle !== "verification") {
-    throw new Error(
-      `AgentRouter returned an unexpected HTML response for /api/user/self (${await verificationPage.title().catch(() => "untitled page")}).`,
-    );
-  }
-
-  const workerChallengeId = randomUUID();
-  emit({
-    type: "challenge",
-    challenge: {
-      workerChallengeId,
-      accountId: account.id,
-      accountLabel: account.label,
-      kind: "agentrouter-waf",
-      prompt: "AgentRouter opened its Access Verification slider in the visible browser. Complete the slide there; this cycle will resume automatically.",
-      verificationCode: null,
-      expiresInMs: config.authChallengeTimeoutMs,
-    },
-  });
-  progress(
-    "agentrouter-verification",
-    "AgentRouter's WAF returned the verified Access Verification slider for /api/user/self; waiting for it in the visible browser.",
-    49,
-  );
-
-  const deadline = Date.now() + config.authChallengeTimeoutMs;
-  let lastHeartbeatAt = Date.now();
   try {
+    await verificationPage.setExtraHTTPHeaders(apiHeaders(userId));
+    const navigation = await verificationPage.goto(`${config.baseUrl}/api/user/self`, {
+      waitUntil: "domcontentloaded",
+      timeout: config.requestTimeoutMs,
+    });
+
+    const immediatePayload = await readTopLevelJson(verificationPage);
+    const immediateUserId = parseAgentRouterUserId(immediatePayload?.data?.id);
+    const contentType = navigation?.headers()["content-type"] ?? "";
+    verificationCall = {
+      path: "/api/user/self",
+      method: "GET",
+      status: navigation?.status() ?? 0,
+      ok: immediatePayload?.success === true && immediateUserId === userId,
+      latencyMs: Date.now() - started,
+      responsePath: verificationPage.url(),
+      contentType,
+      source: "access-verification",
+    };
+    if (!verificationCall.ok) {
+      verificationCall.error = contentType.toLowerCase().includes("text/html")
+        ? "AgentRouter Access Verification is required."
+        : "AgentRouter verification request did not return the expected authenticated user.";
+    }
+    apiCalls.push(verificationCall);
+
+    if (verificationCall.ok) {
+      recoverVerificationCalls();
+      return;
+    }
+
+    const challengeText = (await verificationPage.locator("body").innerText().catch(() => "")).toLowerCase();
+    const challengeTitle = (await verificationPage.title().catch(() => "")).toLowerCase();
+    if (
+      !challengeText.includes("access verification") &&
+      !challengeText.includes("slide to verify") &&
+      challengeTitle !== "verification"
+    ) {
+      throw new Error(
+        `AgentRouter returned an unexpected HTML response for /api/user/self (${await verificationPage.title().catch(() => "untitled page")}).`,
+      );
+    }
+
+    workerChallengeId = randomUUID();
+    emit({
+      type: "challenge",
+      challenge: {
+        workerChallengeId,
+        accountId: account.id,
+        accountLabel: account.label,
+        kind: "agentrouter-waf",
+        prompt: "AgentRouter opened its Access Verification slider in the visible browser. Complete the slide there; this cycle will resume automatically.",
+        verificationCode: null,
+        expiresInMs: config.authChallengeTimeoutMs,
+      },
+    });
+    progress(
+      "agentrouter-verification",
+      "AgentRouter's WAF returned the verified Access Verification slider for /api/user/self; waiting for it in the visible browser.",
+      49,
+    );
+
+    const deadline = Date.now() + config.authChallengeTimeoutMs;
+    let lastHeartbeatAt = Date.now();
     while (Date.now() < deadline) {
       throwIfCancelled();
       const payload = await readTopLevelJson(verificationPage);
-      if (payload?.success === true && Number(payload.data?.id) === Number(userId)) {
-        for (const call of apiCalls) {
-          if (call.path === "/api/user/self" && !call.ok && call.contentType?.toLowerCase().includes("text/html")) {
-            call.recovered = true;
-          }
-        }
+      if (payload?.success === true && parseAgentRouterUserId(payload.data?.id) === userId) {
+        verificationCall.recovered = true;
+        recoverVerificationCalls();
         progress(
           "agentrouter-verified",
           "AgentRouter Access Verification completed; allowing its WAF state to settle before retrying account data.",
@@ -1264,8 +1296,25 @@ async function completeAgentRouterAccessVerification(context, page, account, con
       await wait(500);
     }
     throw new Error("AgentRouter Access Verification was not completed before the configured authentication timeout.");
+  } catch (error) {
+    if (!verificationCall) {
+      apiCalls.push({
+        path: "/api/user/self",
+        method: "GET",
+        status: 0,
+        ok: false,
+        latencyMs: Date.now() - started,
+        responsePath: verificationPage.url(),
+        contentType: "",
+        source: "access-verification",
+        error: errorText(error).slice(0, 500),
+      });
+    }
+    throw error;
   } finally {
-    emit({ type: "challenge-complete", workerChallengeId });
+    if (workerChallengeId) {
+      emit({ type: "challenge-complete", workerChallengeId });
+    }
     await verificationPage.close().catch(() => undefined);
     await page.bringToFront().catch(() => undefined);
   }
@@ -1440,43 +1489,6 @@ async function captureAgentRouterApiToken(page, config, userId, apiCalls) {
   return candidates[0]?.key.trim() || null;
 }
 
-
-// Authoritative money source: the console money cards render from /api/user/self but are
-// subject to the site's known "$0 until refresh" gating. Reading the API directly (same-origin
-// cookies, in-page fetch) returns quota/used_quota/request_count that map 1:1 to the displayed
-// $ amounts at quotaPerUnit. Only the derived numbers are used; the raw access_token in the
-// payload is never read, logged, or persisted.
-async function readAuthoritativeMoneyPayload(context, config, userId) {
-  try {
-    const probePage = await context.newPage();
-    let payload = null;
-    try {
-      await probePage.setExtraHTTPHeaders(apiHeaders(userId));
-      await probePage.goto(`${config.baseUrl}/api/user/self`, {
-        waitUntil: "domcontentloaded",
-        timeout: config.requestTimeoutMs,
-      });
-      const text = await probePage.locator("body").innerText().catch(() => "");
-      payload = text.trim().startsWith("{") ? JSON.parse(text) : null;
-    } finally {
-      await probePage.close().catch(() => undefined);
-    }
-    const data = payload && payload.success === true && payload.data ? payload.data : null;
-    if (!data) return null;
-    const quota = Number(data.quota);
-    const used = Number(data.used_quota);
-    const requests = Number(data.request_count);
-    if (![quota, used, requests].every(Number.isFinite)) return null;
-    return {
-      balance: quota / 500_000,
-      consumed: used / 500_000,
-      requestCount: requests,
-      apiRequestCount: requests,
-    };
-  } catch {
-    return null;
-  }
-}
 
 async function logoutAndPersist(context, page, config, userId, statePath, apiCalls) {
   const started = Date.now();
@@ -1737,6 +1749,39 @@ async function runWorker({ account, config }) {
     );
     activePage = authenticated.page;
     authenticatedUserId = authenticated.user.id;
+    let authoritativeUser;
+    try {
+      authoritativeUser = await collectAuthenticatedUser(
+        context.request,
+        config.baseUrl,
+        config.requestTimeoutMs,
+        apiHeaders(authenticatedUserId),
+        result.apiCalls,
+      );
+    } catch (error) {
+      if (!(error instanceof AgentRouterAccessVerificationRequired)) throw error;
+      await completeAgentRouterAccessVerification(
+        context,
+        activePage,
+        account,
+        config,
+        authenticatedUserId,
+        result.apiCalls,
+      );
+      authoritativeUser = await collectAuthenticatedUser(
+        context.request,
+        config.baseUrl,
+        config.requestTimeoutMs,
+        apiHeaders(authenticatedUserId),
+        result.apiCalls,
+      );
+    }
+    const authoritativeUserId = parseAgentRouterUserId(authoritativeUser.id);
+    if (authoritativeUserId !== authenticatedUserId) {
+      throw new Error(
+        `AgentRouter authenticated user mismatch: browser user ${authenticatedUserId}, API user ${authoritativeUser.id}.`,
+      );
+    }
     result.loginMs = Date.now() - loginStarted;
     result.sessionReused = Boolean(profileAvailable || storedGithubState) && !authentication.credentialsSubmitted;
     log(`[${account.label}] authenticated in ${result.loginMs}ms`);
@@ -1787,69 +1832,22 @@ async function runWorker({ account, config }) {
     if (!requiredActivity.every(Number.isFinite)) {
       throw new Error("AgentRouter's visible Console did not expose all required usage and performance cards.");
     }
-    const hasVisibleActivity = [
-      consoleMetrics.requestCount,
-      consoleMetrics.statisticalCount,
-      consoleMetrics.statisticalTokens,
-    ].some((value) => Number.isFinite(value) && value > 0);
-    // Console is the reliable money source (user-verified); /console/topup needs an extra
-    // refresh and is only used as a fallback when the console cards are missing/invalid.
-    const consoleHasRealMoney = consoleMoneyValid && !(consoleMetrics.balance === 0 && consoleMetrics.consumed === 0);
-    const money = consoleHasRealMoney ? consoleMetrics : walletMetrics;
-    // Prefer the authoritative /api/user/self numbers (site money cards can show a gated
-    // $0.00 until a manual refresh; the API is never gated this way).
-    // The post-OAuth user payload (authenticated.user) IS /api/user/self and already carries
-    // quota/used_quota — capture money from it before anything else can go stale or gated.
-    const authQuota = Number(authenticated?.user?.quota);
-    const authUsed = Number(authenticated?.user?.used_quota);
-    const authRequests = Number(authenticated?.user?.request_count);
-    const authMoney =
-      Number.isFinite(authQuota) && Number.isFinite(authUsed) && Number.isFinite(authRequests) &&
-      (authQuota > 0 || authUsed > 0 || authRequests > 0)
-        ? { balance: authQuota / 500_000, consumed: authUsed / 500_000, requestCount: authRequests }
-        : null;
-    const apiMoney = authMoney ?? await readAuthoritativeMoneyPayload(context, config, authenticatedUserId);
-    const moneySource = authMoney
-      ? "api-user-auth"
-      : apiMoney
-        ? "api-user-self"
-        : consoleHasRealMoney
-          ? "/console"
-          : "/console/topup";
-    const finalMoney = (authMoney ?? apiMoney) ?? (
-      consoleHasRealMoney
-        ? consoleMetrics
-        : walletMoneyValid
-          ? walletMetrics
-          : null
+    const apiMoney = authoritativeMoneyFromUser(authoritativeUser, 500_000);
+    if (!apiMoney) {
+      throw new Error("AgentRouter's authenticated /api/user/self payload did not expose valid quota, usage, and request values.");
+    }
+    const moneySource = "/api/user/self";
+    const finalMoney = apiMoney;
+    const finalRequestCount = apiMoney.requestCount;
+    progress(
+      "money-api",
+      `Authoritative balance from /api/user/self ($${finalMoney.balance.toFixed(2)} balance, $${finalMoney.consumed.toFixed(2)} consumed).`,
+      78,
     );
-    if (!finalMoney || !Number.isFinite(finalMoney.balance) || !Number.isFinite(finalMoney.consumed)) {
-      throw new Error("AgentRouter did not return authoritative or parseable balance/consumption values after settled reads.");
-    }
-    const finalRequestCount = authMoney
-      ? Math.round(authMoney.requestCount)
-      : apiMoney
-        ? Math.round(apiMoney.requestCount)
-        : consoleMetrics.requestCount;
-    if (authMoney) {
-      progress("money-api", `Authoritative balance from the authenticated user payload ($${finalMoney.balance.toFixed(2)} balance, $${finalMoney.consumed.toFixed(2)} consumed).`, 78);
-    } else if (apiMoney) {
-      progress("money-api", `Authoritative balance from /api/user/self ($${finalMoney.balance.toFixed(2)} balance, $${finalMoney.consumed.toFixed(2)} consumed).`, 78);
-    }
-    if (
-      !authMoney && !apiMoney &&
-      hasVisibleActivity &&
-      finalMoney.balance === 0 &&
-      finalMoney.consumed === 0
-    ) {
-      throw new Error(
-        `AgentRouter still showed $0.00 for both balance and consumption on the selected money source after ${consoleReading.refreshCount + 1} settled page load(s) while usage cards show activity; refusing to save false money values.`,
-      );
-    }
     result.metrics = {
       siteUserId: authenticatedUserId,
-      siteUsername: typeof authenticated.user?.username === "string"
-        ? authenticated.user.username
+      siteUsername: typeof authoritativeUser.username === "string"
+        ? authoritativeUser.username
         : undefined,
       quotaPerUnit: 500_000,
       balance: finalMoney.balance,
@@ -1862,8 +1860,8 @@ async function runWorker({ account, config }) {
       averageTpm: consoleMetrics.averageTpm,
     };
     result.summary = {
-      user: safeUserSnapshot(authenticated.user),
-      collectionSource: "agentrouter-visible-ui",
+      user: safeUserSnapshot(authoritativeUser),
+      collectionSource: "agentrouter-api-and-visible-ui",
       launchAttempts,
       visitedRoutes: ["/console/", "/console/topup"],
       moneyCollection: {

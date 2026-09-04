@@ -41,3 +41,30 @@ export function parseLabeledNumber(text, label) {
 export function parseLabeledMoney(text, label) {
   return parseLabeledNumber(text, label);
 }
+
+export function parseAgentRouterUserId(value) {
+  if (typeof value === "number") {
+    return Number.isSafeInteger(value) && value > 0 ? value : null;
+  }
+  if (typeof value !== "string" || !/^[1-9]\d*$/.test(value)) return null;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) ? parsed : null;
+}
+
+export function authoritativeMoneyFromUser(user, quotaPerUnit) {
+  if (!user || typeof user !== "object" || Array.isArray(user)) return null;
+  if (typeof quotaPerUnit !== "number" || !Number.isFinite(quotaPerUnit) || quotaPerUnit <= 0) return null;
+
+  const quota = user.quota;
+  const usedQuota = user.used_quota;
+  const requestCount = user.request_count;
+  if (typeof quota !== "number" || !Number.isFinite(quota)) return null;
+  if (typeof usedQuota !== "number" || !Number.isFinite(usedQuota) || usedQuota < 0) return null;
+  if (!Number.isSafeInteger(requestCount) || requestCount < 0) return null;
+
+  return {
+    balance: quota / quotaPerUnit,
+    consumed: usedQuota / quotaPerUnit,
+    requestCount,
+  };
+}
