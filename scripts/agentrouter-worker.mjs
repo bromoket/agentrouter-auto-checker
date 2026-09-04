@@ -1787,7 +1787,7 @@ async function runWorker({ account, config }) {
     const money = consoleHasRealMoney ? consoleMetrics : walletMetrics;
     // Prefer the authoritative /api/user/self numbers (site money cards can show a gated
     // $0.00 until a manual refresh; the API is never gated this way).
-    const apiMoney = await readAuthoritativeMoneyViaApi(page);
+    const apiMoney = await readAuthoritativeMoneyViaApi(activePage);
     const moneySource = apiMoney ? "api-user-self" : (consoleHasRealMoney ? "/console" : "/console/topup");
     const finalMoney = apiMoney ?? money;
     const finalRequestCount = apiMoney ? Math.round(apiMoney.requestCount) : consoleMetrics.requestCount;
