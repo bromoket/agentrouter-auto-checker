@@ -64,11 +64,10 @@ exec /usr/bin/xvfb-run -a -s "-screen 0 1920x1080x24" /usr/local/bin/bun run sta
 
 - [ ] **Step 2: Configure only staging to use the stable identity**
 
-In `deploy/ai-fleet-observatory.service`, add these service environment entries after `PLAYWRIGHT_BROWSERS_PATH`:
+Replace staging's `ExecStart=` so the fixed values override any same-named entries inherited from its environment file:
 
 ```ini
-Environment=XVFB_DISPLAY=99
-Environment=XVFB_AUTH_FILE=/run/ai-fleet-observatory/Xauthority
+ExecStart=/usr/bin/env XVFB_DISPLAY=99 XVFB_AUTH_FILE=/run/ai-fleet-observatory/Xauthority /opt/ai-fleet-observatory/scripts/start-server.sh
 ```
 
 Add this directly after `RuntimeDirectory=ai-fleet-observatory`:
@@ -207,15 +206,15 @@ SyslogIdentifier=ai-fleet-observatory-novnc
 WantedBy=multi-user.target
 ```
 
-- [ ] **Step 3: Make Observatory start both weakly coupled companions**
+- [ ] **Step 3: Make Observatory continuously supervise both weakly coupled companions**
 
-Extend the existing `Wants=` line in `deploy/ai-fleet-observatory.service`:
+Add this after the existing `Wants=` line in `deploy/ai-fleet-observatory.service`:
 
 ```ini
-Wants=network-online.target tailscaled.service ai-fleet-observatory-vnc.service ai-fleet-observatory-novnc.service
+Upholds=ai-fleet-observatory-vnc.service ai-fleet-observatory-novnc.service
 ```
 
-Keep dependencies from companion to Observatory directional: companion failures do not propagate to the main service.
+`Upholds=` requires systemd 249 or newer; the Xeon runs systemd 255. It continuously restarts an inactive or failed companion while Observatory is active, including after Observatory's own automatic failure restart. Keep dependencies from companion to Observatory directional: companion failures do not propagate to the main service.
 
 - [ ] **Step 4: Verify units on the Ubuntu target**
 

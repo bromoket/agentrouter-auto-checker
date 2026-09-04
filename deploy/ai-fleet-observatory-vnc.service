@@ -1,0 +1,44 @@
+[Unit]
+Description=AI Fleet Observatory staging Xvfb VNC bridge
+Documentation=https://github.com/bromoket/agentrouter-auto-checker
+After=ai-fleet-observatory.service
+Requires=ai-fleet-observatory.service
+PartOf=ai-fleet-observatory.service
+JoinsNamespaceOf=ai-fleet-observatory.service
+
+[Service]
+Type=simple
+User=agentrouter
+Group=agentrouter
+Environment=HOME=/var/lib/ai-fleet-observatory
+Environment=DISPLAY=:99
+Environment=XAUTHORITY=/run/ai-fleet-observatory/Xauthority
+ExecStart=/usr/bin/x11vnc -display :99 -auth /run/ai-fleet-observatory/Xauthority -listen 127.0.0.1 -rfbport 5900 -forever -shared -nopw -safer -nocmds
+Restart=always
+RestartSec=2
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+LockPersonality=true
+ProtectClock=true
+ProtectControlGroups=true
+ProtectHostname=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectProc=invisible
+RestrictAddressFamilies=AF_UNIX AF_INET
+RestrictRealtime=true
+RestrictSUIDSGID=true
+SystemCallArchitectures=native
+TasksMax=128
+MemoryMax=256M
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ai-fleet-observatory-vnc
+
+[Install]
+WantedBy=multi-user.target

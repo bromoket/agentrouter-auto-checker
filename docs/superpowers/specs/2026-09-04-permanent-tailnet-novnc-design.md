@@ -67,6 +67,8 @@ Two systemd unit templates are versioned under `deploy/`:
 
 Both units use systemd hardening consistent with the existing Observatory unit. Failure of either companion must not stop or restart the dashboard, scheduler, Antigravity probes, or AgentRouter worker.
 
+The main staging unit uses systemd `Upholds=` to continuously restore either companion whenever Observatory is active. The Xeon runs systemd 255, satisfying the directive's systemd 249 minimum. This closes the automatic failure-restart path without making the main service depend on companion success.
+
 ## Data and Interaction Flow
 
 1. A tailnet device opens the canonical HTTPS URL.

@@ -3,6 +3,7 @@ Description=AI Fleet Observatory staging
 Documentation=https://github.com/bromoket/agentrouter-auto-checker
 After=network-online.target tailscaled.service
 Wants=network-online.target tailscaled.service
+Upholds=ai-fleet-observatory-vnc.service ai-fleet-observatory-novnc.service
 
 [Service]
 Type=simple
@@ -13,9 +14,7 @@ EnvironmentFile=/etc/ai-fleet-observatory/env
 Environment=HOME=/var/lib/ai-fleet-observatory
 Environment=XDG_CACHE_HOME=/var/lib/ai-fleet-observatory/cache
 Environment=PLAYWRIGHT_BROWSERS_PATH=/var/lib/ai-fleet-observatory/ms-playwright
-Environment=XVFB_DISPLAY=99
-Environment=XVFB_AUTH_FILE=/run/ai-fleet-observatory/Xauthority
-ExecStart=/opt/ai-fleet-observatory/scripts/start-server.sh
+ExecStart=/usr/bin/env XVFB_DISPLAY=99 XVFB_AUTH_FILE=/run/ai-fleet-observatory/Xauthority /opt/ai-fleet-observatory/scripts/start-server.sh
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=45

@@ -1,0 +1,40 @@
+[Unit]
+Description=AI Fleet Observatory staging noVNC gateway
+Documentation=https://github.com/bromoket/agentrouter-auto-checker
+After=network-online.target ai-fleet-observatory-vnc.service
+Wants=network-online.target ai-fleet-observatory-vnc.service
+PartOf=ai-fleet-observatory.service
+
+[Service]
+Type=simple
+User=agentrouter
+Group=agentrouter
+ExecStart=/usr/bin/websockify --web=/usr/share/novnc 127.0.0.1:6080 127.0.0.1:5900
+Restart=on-failure
+RestartSec=2
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+LockPersonality=true
+ProtectClock=true
+ProtectControlGroups=true
+ProtectHostname=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectProc=invisible
+RestrictAddressFamilies=AF_UNIX AF_INET
+RestrictRealtime=true
+RestrictSUIDSGID=true
+SystemCallArchitectures=native
+TasksMax=128
+MemoryMax=256M
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ai-fleet-observatory-novnc
+
+[Install]
+WantedBy=multi-user.target
