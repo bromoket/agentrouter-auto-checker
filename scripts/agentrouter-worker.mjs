@@ -1446,13 +1446,21 @@ async function captureAgentRouterApiToken(page, config, userId, apiCalls) {
 // cookies, in-page fetch) returns quota/used_quota/request_count that map 1:1 to the displayed
 // $ amounts at quotaPerUnit. Only the derived numbers are used; the raw access_token in the
 // payload is never read, logged, or persisted.
-async function readAuthoritativeMoneyViaApi(page) {
+async function readAuthoritativeMoneyPayload(context, config, userId) {
   try {
-    const payload = await page.evaluate(() =>
-      fetch("/api/user/self", { headers: { accept: "application/json" } })
-        .then((r) => r.json())
-        .catch(() => null),
-    );
+    const probePage = await context.newPage();
+    let payload = null;
+    try {
+      await probePage.setExtraHTTPHeaders(apiHeaders(userId));
+      await probePage.goto(`${config.baseUrl}/api/user/self`, {
+        waitUntil: "domcontentloaded",
+        timeout: config.requestTimeoutMs,
+      });
+      const text = await probePage.locator("body").innerText().catch(() => "");
+      payload = text.trim().startsWith("{") ? JSON.parse(text) : null;
+    } finally {
+      await probePage.close().catch(() => undefined);
+    }
     const data = payload && payload.success === true && payload.data ? payload.data : null;
     if (!data) return null;
     const quota = Number(data.quota);
@@ -1787,7 +1795,7 @@ async function runWorker({ account, config }) {
     const money = consoleHasRealMoney ? consoleMetrics : walletMetrics;
     // Prefer the authoritative /api/user/self numbers (site money cards can show a gated
     // $0.00 until a manual refresh; the API is never gated this way).
-    const apiMoney = await readAuthoritativeMoneyViaApi(activePage);
+    const apiMoney = await readAuthoritativeMoneyPayload(context, config, authenticatedUserId);
     const moneySource = apiMoney ? "api-user-self" : (consoleHasRealMoney ? "/console" : "/console/topup");
     const finalMoney = apiMoney ?? money;
     const finalRequestCount = apiMoney ? Math.round(apiMoney.requestCount) : consoleMetrics.requestCount;
