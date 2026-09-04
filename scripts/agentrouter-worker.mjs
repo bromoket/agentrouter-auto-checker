@@ -1686,8 +1686,17 @@ async function runWorker({ account, config }) {
         );
       }
       if (!staleLogout) {
-        log(`[${account.label}] preflight logout failed after retry on ${new URL(activePage.url()).pathname}`);
-        throw new Error("Unable to clear the stale AgentRouter session before login.");
+        // The agentrouter session may already be dead server-side while its cookies linger
+        // (site invalidated sessions). A failed logout confirm must not block a fresh login:
+        // drop the agentrouter-domain cookies from the profile and continue to OAuth.
+        log(`[${account.label}] preflight logout failed after retry; clearing agentrouter cookies and continuing.`);
+        const agentRouterOrigin = new URL(config.baseUrl).origin;
+        const cleared = await context.clearCookies({ domain: new URL(agentRouterOrigin).hostname }).catch(() => 0);
+        log(`[${account.label}] agentrouter cookies cleared (${cleared ?? "n/a"})`);
+        await activePage.goto(`${config.baseUrl}/login`, {
+          waitUntil: "domcontentloaded",
+          timeout: config.requestTimeoutMs,
+        }).catch(() => undefined);
       }
       preflightLoggedOut = true;
       await activePage.goto(`${config.baseUrl}/login`, {
