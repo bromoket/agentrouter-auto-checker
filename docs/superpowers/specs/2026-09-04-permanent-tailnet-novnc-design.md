@@ -44,6 +44,8 @@ Any tailnet identity allowed by the current ACL can interact with the authentica
 
 A deterministic display and stable authority path let x11vnc reconnect after Observatory restarts without inspecting process IDs or private temporary directories. Xvfb retains `-nolisten tcp`; only its local Unix socket exists.
 
+The x11vnc companion joins Observatory's systemd private temporary namespace so it can reach the X11 Unix socket without removing `PrivateTmp=true` from the main service or exposing that socket in the host's global `/tmp`.
+
 ## Companion Services
 
 Two systemd unit templates are versioned under `deploy/`:
