@@ -40,7 +40,7 @@ Any tailnet identity allowed by the current ACL can interact with the authentica
 
 ## Xvfb Lifecycle
 
-`scripts/start-server.sh` changes from automatically selecting a random X display to using staging display `:99`. `xvfb-run` stores its Xauthority cookie at `/run/ai-fleet-observatory/Xauthority`, inside the service's existing systemd `RuntimeDirectory`.
+`scripts/start-server.sh` accepts an opt-in `XVFB_DISPLAY` and `XVFB_AUTH_FILE` pair. The staging service sets them to `99` and `/run/ai-fleet-observatory/Xauthority`; specifying only one is a startup error. When neither is set, the wrapper retains its existing automatically selected display and temporary authority file, so production and manual invocations remain unchanged.
 
 A deterministic display and stable authority path let x11vnc reconnect after Observatory restarts without inspecting process IDs or private temporary directories. Xvfb retains `-nolisten tcp`; only its local Unix socket exists.
 
