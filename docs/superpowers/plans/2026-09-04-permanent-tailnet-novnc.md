@@ -11,7 +11,7 @@
 ## Global Constraints
 
 - The change applies only to staging service `ai-fleet-observatory`; production behavior and data remain unchanged.
-- x11vnc MUST bind only to `127.0.0.1:5900`.
+- x11vnc MUST bind only to `127.0.0.1:15900`.
 - websockify MUST bind only to `127.0.0.1:6080`.
 - Tailscale Serve MUST preserve `/` and `/observatory/` while adding `/observatory-vnc/`.
 - Tailscale Funnel, wildcard listeners, LAN listeners, public listeners, and shared VNC passwords are prohibited.
@@ -106,7 +106,7 @@ git commit -m "feat: stabilize staging Xvfb identity"
 
 **Interfaces:**
 - Consumes: Display `:99`, `/run/ai-fleet-observatory/Xauthority`, distro noVNC files at `/usr/share/novnc`.
-- Produces: RFB at `127.0.0.1:5900`, noVNC HTTP/WebSocket at `127.0.0.1:6080`, and one independently disableable lifecycle target.
+- Produces: RFB at `127.0.0.1:15900`, noVNC HTTP/WebSocket at `127.0.0.1:6080`, and one independently disableable lifecycle target.
 
 - [ ] **Step 1: Add the x11vnc unit**
 
@@ -128,7 +128,7 @@ Group=agentrouter
 Environment=HOME=/var/lib/ai-fleet-observatory
 Environment=DISPLAY=:99
 Environment=XAUTHORITY=/run/ai-fleet-observatory/Xauthority
-ExecStart=/usr/bin/x11vnc -display :99 -auth /run/ai-fleet-observatory/Xauthority -listen 127.0.0.1 -rfbport 5900 -forever -shared -nopw -safer -nocmds
+ExecStart=/usr/bin/x11vnc -display :99 -auth /run/ai-fleet-observatory/Xauthority -listen 127.0.0.1 -rfbport 15900 -forever -shared -nopw -safer -nocmds
 Restart=always
 RestartSec=2
 UMask=0077
@@ -172,7 +172,7 @@ PartOf=ai-fleet-observatory-novnc.target
 Type=simple
 User=agentrouter
 Group=agentrouter
-ExecStart=/usr/bin/websockify --web=/usr/share/novnc 127.0.0.1:6080 127.0.0.1:5900
+ExecStart=/usr/bin/websockify --web=/usr/share/novnc 127.0.0.1:6080 127.0.0.1:15900
 Restart=on-failure
 RestartSec=2
 UMask=0077
@@ -292,7 +292,7 @@ https://bkserver.tailbbaa91.ts.net/observatory-vnc/vnc.html?autoconnect=true&res
 Add listener checks:
 
 ```bash
-sudo ss -ltnp '( sport = :5900 or sport = :6080 )'
+sudo ss -ltnp '( sport = :15900 or sport = :6080 )'
 systemctl --no-pager --full status \
   ai-fleet-observatory.service \
   ai-fleet-observatory-novnc.target \
@@ -300,7 +300,7 @@ systemctl --no-pager --full status \
   ai-fleet-observatory-novnc.service
 ```
 
-Require only `127.0.0.1:5900` and `127.0.0.1:6080`. Add rollback commands that remove only this Serve path and these companions:
+Require only `127.0.0.1:15900` and `127.0.0.1:6080`. Add rollback commands that remove only this Serve path and these companions:
 
 ```bash
 sudo tailscale serve --yes --https=443 --set-path=/observatory-vnc/ off
@@ -411,10 +411,10 @@ systemctl is-active \
   ai-fleet-observatory-novnc.target \
   ai-fleet-observatory-vnc.service \
   ai-fleet-observatory-novnc.service
-sudo ss -ltnp '( sport = :5900 or sport = :6080 )'
+sudo ss -ltnp '( sport = :15900 or sport = :6080 )'
 ```
 
-Expected: four `active` lines; only IPv4 loopback listeners for ports 5900 and 6080. Stop each companion separately and confirm the active target restores it while `ai-fleet-observatory.service` stays active.
+Expected: four `active` lines; only IPv4 loopback listeners for ports 15900 and 6080. Stop each companion separately and confirm the active target restores it while `ai-fleet-observatory.service` stays active.
 
 - [ ] **Step 5: Verify reconnect across an Observatory restart**
 

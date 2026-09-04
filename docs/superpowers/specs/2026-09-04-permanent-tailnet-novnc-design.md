@@ -14,7 +14,7 @@ The existing Tailscale Serve HTTPS listener gains one path:
 
 - `https://bkserver.tailbbaa91.ts.net/observatory-vnc/`
 
-The existing `/` and `/observatory/` handlers remain unchanged. Tailscale Serve proxies the new path to `http://127.0.0.1:6080`. Websockify serves the distro-provided noVNC static files and proxies WebSockets to x11vnc on `127.0.0.1:5900`. x11vnc attaches to the Observatory staging Xvfb display.
+The existing `/` and `/observatory/` handlers remain unchanged. Tailscale Serve proxies the new path to `http://127.0.0.1:6080`. Websockify serves the distro-provided noVNC static files and proxies WebSockets to x11vnc on `127.0.0.1:15900`. x11vnc attaches to the Observatory staging Xvfb display.
 
 The canonical launch URL is:
 
@@ -30,7 +30,7 @@ Tailscale identity and ACL enforcement are the only authentication layer. No sha
 
 The implementation must preserve all of these invariants:
 
-- x11vnc listens only on `127.0.0.1:5900`.
+- x11vnc listens only on `127.0.0.1:15900`.
 - websockify listens only on `127.0.0.1:6080`.
 - Tailscale Funnel is never enabled.
 - No LAN, public IPv4, public IPv6, or wildcard listener is created.
@@ -54,7 +54,7 @@ Two hardened systemd service templates and one lifecycle target are versioned un
    - Runs as `agentrouter`.
    - Waits for display `:99` and its Xauthority file.
    - Starts x11vnc in shared, persistent, no-password mode.
-   - Binds RFB only to loopback port 5900.
+   - Binds RFB only to loopback port 15900.
    - Disables x11vnc's remote-command and external-command channels.
    - Restarts and retries across Xvfb lifecycle changes.
 
@@ -62,7 +62,7 @@ Two hardened systemd service templates and one lifecycle target are versioned un
    - Runs as `agentrouter`.
    - Serves `/usr/share/novnc` through websockify.
    - Binds HTTP/WebSocket traffic only to loopback port 6080.
-   - Proxies only to loopback port 5900.
+   - Proxies only to loopback port 15900.
    - Restarts independently.
 
 Both services use systemd hardening consistent with the existing Observatory unit. Failure of either companion must not stop or restart the dashboard, scheduler, Antigravity probes, or AgentRouter worker.
@@ -112,7 +112,7 @@ The change is complete only when all of these checks pass:
 2. `systemd-analyze verify` accepts the Observatory, both companion services, and the lifecycle target.
 3. The repository's Bun tests and TypeScript checks still pass.
 4. `ai-fleet-observatory`, `ai-fleet-observatory-novnc.target`, `ai-fleet-observatory-vnc`, and `ai-fleet-observatory-novnc` are active.
-5. Socket inspection shows ports 5900 and 6080 bound only to loopback.
+5. Socket inspection shows ports 15900 and 6080 bound only to loopback.
 6. Tailscale Serve status contains the unchanged `/` and `/observatory/` handlers plus `/observatory-vnc/`.
 7. A tailnet browser opens the canonical URL and controls the worker's actual Xvfb canvas.
 8. Restarting Observatory temporarily disconnects noVNC, after which the same URL reconnects without manual server repair.

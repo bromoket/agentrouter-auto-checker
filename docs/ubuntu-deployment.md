@@ -347,7 +347,7 @@ The explicit `path` query keeps the noVNC WebSocket request under the mounted Se
 Verify the services and loopback-only listeners:
 
 ```bash
-sudo ss -ltnp '( sport = :5900 or sport = :6080 )'
+sudo ss -ltnp '( sport = :15900 or sport = :6080 )'
 systemctl --no-pager --full status \
   ai-fleet-observatory.service \
   ai-fleet-observatory-novnc.target \
@@ -355,7 +355,7 @@ systemctl --no-pager --full status \
   ai-fleet-observatory-novnc.service
 ```
 
-Only `127.0.0.1:5900` and `127.0.0.1:6080` are valid. To roll back, remove only this Serve
+Only `127.0.0.1:15900` and `127.0.0.1:6080` are valid. To roll back, remove only this Serve
 path and disable only its companions:
 
 ```bash

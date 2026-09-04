@@ -13,7 +13,7 @@ Group=agentrouter
 Environment=HOME=/var/lib/ai-fleet-observatory
 Environment=DISPLAY=:99
 Environment=XAUTHORITY=/run/ai-fleet-observatory/Xauthority
-ExecStart=/usr/bin/x11vnc -display :99 -auth /run/ai-fleet-observatory/Xauthority -listen 127.0.0.1 -rfbport 5900 -forever -shared -nopw -safer -nocmds
+ExecStart=/usr/bin/x11vnc -display :99 -auth /run/ai-fleet-observatory/Xauthority -listen 127.0.0.1 -rfbport 15900 -forever -shared -nopw -safer -nocmds
 Restart=always
 RestartSec=2
 UMask=0077
