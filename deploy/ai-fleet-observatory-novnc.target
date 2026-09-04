@@ -1,0 +1,9 @@
+[Unit]
+Description=AI Fleet Observatory staging noVNC access
+Documentation=https://github.com/bromoket/agentrouter-auto-checker
+After=ai-fleet-observatory.service
+Requires=ai-fleet-observatory.service
+Upholds=ai-fleet-observatory-vnc.service ai-fleet-observatory-novnc.service
+
+[Install]
+WantedBy=multi-user.target

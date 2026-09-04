@@ -102,11 +102,11 @@ git commit -m "feat: stabilize staging Xvfb identity"
 **Files:**
 - Create: `deploy/ai-fleet-observatory-vnc.service`
 - Create: `deploy/ai-fleet-observatory-novnc.service`
-- Modify: `deploy/ai-fleet-observatory.service:1-6`
+- Create: `deploy/ai-fleet-observatory-novnc.target`
 
 **Interfaces:**
 - Consumes: Display `:99`, `/run/ai-fleet-observatory/Xauthority`, distro noVNC files at `/usr/share/novnc`.
-- Produces: RFB at `127.0.0.1:5900` and noVNC HTTP/WebSocket at `127.0.0.1:6080`.
+- Produces: RFB at `127.0.0.1:5900`, noVNC HTTP/WebSocket at `127.0.0.1:6080`, and one independently disableable lifecycle target.
 
 - [ ] **Step 1: Add the x11vnc unit**
 
@@ -118,7 +118,7 @@ Description=AI Fleet Observatory staging Xvfb VNC bridge
 Documentation=https://github.com/bromoket/agentrouter-auto-checker
 After=ai-fleet-observatory.service
 Requires=ai-fleet-observatory.service
-PartOf=ai-fleet-observatory.service
+PartOf=ai-fleet-observatory.service ai-fleet-observatory-novnc.target
 JoinsNamespaceOf=ai-fleet-observatory.service
 
 [Service]
@@ -154,9 +154,6 @@ MemoryMax=256M
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=ai-fleet-observatory-vnc
-
-[Install]
-WantedBy=multi-user.target
 ```
 
 - [ ] **Step 2: Add the websockify/noVNC unit**
@@ -169,7 +166,7 @@ Description=AI Fleet Observatory staging noVNC gateway
 Documentation=https://github.com/bromoket/agentrouter-auto-checker
 After=network-online.target ai-fleet-observatory-vnc.service
 Wants=network-online.target ai-fleet-observatory-vnc.service
-PartOf=ai-fleet-observatory.service
+PartOf=ai-fleet-observatory-novnc.target
 
 [Service]
 Type=simple
@@ -201,30 +198,36 @@ MemoryMax=256M
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=ai-fleet-observatory-novnc
+```
+
+- [ ] **Step 3: Add the independently disableable lifecycle target**
+
+Create `deploy/ai-fleet-observatory-novnc.target`:
+
+```ini
+[Unit]
+Description=AI Fleet Observatory staging noVNC access
+Documentation=https://github.com/bromoket/agentrouter-auto-checker
+After=ai-fleet-observatory.service
+Requires=ai-fleet-observatory.service
+Upholds=ai-fleet-observatory-vnc.service ai-fleet-observatory-novnc.service
 
 [Install]
 WantedBy=multi-user.target
 ```
 
-- [ ] **Step 3: Make Observatory continuously supervise both weakly coupled companions**
-
-Add this after the existing `Wants=` line in `deploy/ai-fleet-observatory.service`:
-
-```ini
-Upholds=ai-fleet-observatory-vnc.service ai-fleet-observatory-novnc.service
-```
-
-`Upholds=` requires systemd 249 or newer; the Xeon runs systemd 255. It continuously restarts an inactive or failed companion while Observatory is active, including after Observatory's own automatic failure restart. Keep dependencies from companion to Observatory directional: companion failures do not propagate to the main service.
+`Upholds=` requires systemd 249 or newer; the Xeon runs systemd 255. The target continuously restores either inactive or failed companion. `PartOf=` stops both companions when the target is stopped, while companion failure never propagates to the target or main service.
 
 - [ ] **Step 4: Verify units on the Ubuntu target**
 
-Copy the three unit files to temporary names on `bkserver`, then run:
+Copy the four unit files to temporary names on `bkserver`, then run:
 
 ```bash
 sudo systemd-analyze verify \
   /tmp/ai-fleet-observatory.service \
   /tmp/ai-fleet-observatory-vnc.service \
-  /tmp/ai-fleet-observatory-novnc.service
+  /tmp/ai-fleet-observatory-novnc.service \
+  /tmp/ai-fleet-observatory-novnc.target
 ```
 
 Expected: exit 0 with no unit syntax, dependency-cycle, executable, or hardening errors. Delete the temporary files after verification.
@@ -232,9 +235,9 @@ Expected: exit 0 with no unit syntax, dependency-cycle, executable, or hardening
 - [ ] **Step 5: Commit the companion units**
 
 ```bash
-git add deploy/ai-fleet-observatory.service \
-  deploy/ai-fleet-observatory-vnc.service \
-  deploy/ai-fleet-observatory-novnc.service
+git add deploy/ai-fleet-observatory-vnc.service \
+  deploy/ai-fleet-observatory-novnc.service \
+  deploy/ai-fleet-observatory-novnc.target
 git commit -m "feat: add staging noVNC companion services"
 ```
 
@@ -259,10 +262,11 @@ sudo apt-get install -y x11vnc novnc websockify
 sudo cp /opt/ai-fleet-observatory/deploy/ai-fleet-observatory.service /etc/systemd/system/
 sudo cp /opt/ai-fleet-observatory/deploy/ai-fleet-observatory-vnc.service /etc/systemd/system/
 sudo cp /opt/ai-fleet-observatory/deploy/ai-fleet-observatory-novnc.service /etc/systemd/system/
+sudo cp /opt/ai-fleet-observatory/deploy/ai-fleet-observatory-novnc.target /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable ai-fleet-observatory-vnc.service ai-fleet-observatory-novnc.service
+sudo systemctl enable ai-fleet-observatory-novnc.target
 sudo systemctl restart ai-fleet-observatory.service
-sudo systemctl start ai-fleet-observatory-vnc.service ai-fleet-observatory-novnc.service
+sudo systemctl start ai-fleet-observatory-novnc.target
 ```
 
 State that noVNC controls the authenticated worker desktop and is an administrative surface available to identities allowed by the tailnet ACL.
@@ -291,6 +295,7 @@ Add listener checks:
 sudo ss -ltnp '( sport = :5900 or sport = :6080 )'
 systemctl --no-pager --full status \
   ai-fleet-observatory.service \
+  ai-fleet-observatory-novnc.target \
   ai-fleet-observatory-vnc.service \
   ai-fleet-observatory-novnc.service
 ```
@@ -299,9 +304,7 @@ Require only `127.0.0.1:5900` and `127.0.0.1:6080`. Add rollback commands that r
 
 ```bash
 sudo tailscale serve --yes --https=443 --set-path=/observatory-vnc/ off
-sudo systemctl disable --now \
-  ai-fleet-observatory-novnc.service \
-  ai-fleet-observatory-vnc.service
+sudo systemctl disable --now ai-fleet-observatory-novnc.target
 ```
 
 State that `/` and `/observatory/` must still exist after rollback. Do not recommend `tailscale serve reset` or `tailscale serve clear`, because either would remove unrelated handlers.
@@ -381,13 +384,14 @@ sudo apt-get install -y x11vnc novnc websockify
 sudo cp /opt/ai-fleet-observatory/deploy/ai-fleet-observatory.service /etc/systemd/system/
 sudo cp /opt/ai-fleet-observatory/deploy/ai-fleet-observatory-vnc.service /etc/systemd/system/
 sudo cp /opt/ai-fleet-observatory/deploy/ai-fleet-observatory-novnc.service /etc/systemd/system/
+sudo cp /opt/ai-fleet-observatory/deploy/ai-fleet-observatory-novnc.target /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable ai-fleet-observatory-vnc.service ai-fleet-observatory-novnc.service
+sudo systemctl enable ai-fleet-observatory-novnc.target
 sudo systemctl restart ai-fleet-observatory.service
-sudo systemctl start ai-fleet-observatory-vnc.service ai-fleet-observatory-novnc.service
+sudo systemctl start ai-fleet-observatory-novnc.target
 ```
 
-Expected: all three units are active. There are no ad-hoc x11vnc/websockify processes outside the permanent unit cgroups.
+Expected: the main unit, lifecycle target, and both companion services are active. There are no ad-hoc x11vnc/websockify processes outside the permanent unit cgroups.
 
 - [ ] **Step 3: Add the Serve path without replacing existing handlers**
 
@@ -404,12 +408,13 @@ Expected: handlers `/`, `/observatory/`, and `/observatory-vnc/` all exist on `b
 ```bash
 systemctl is-active \
   ai-fleet-observatory.service \
+  ai-fleet-observatory-novnc.target \
   ai-fleet-observatory-vnc.service \
   ai-fleet-observatory-novnc.service
 sudo ss -ltnp '( sport = :5900 or sport = :6080 )'
 ```
 
-Expected: three `active` lines; only IPv4 loopback listeners for ports 5900 and 6080. Stop and restart each companion separately and confirm `ai-fleet-observatory.service` stays active.
+Expected: four `active` lines; only IPv4 loopback listeners for ports 5900 and 6080. Stop each companion separately and confirm the active target restores it while `ai-fleet-observatory.service` stays active.
 
 - [ ] **Step 5: Verify reconnect across an Observatory restart**
 

@@ -48,7 +48,7 @@ The x11vnc companion joins Observatory's systemd private temporary namespace so 
 
 ## Companion Services
 
-Two systemd unit templates are versioned under `deploy/`:
+Two hardened systemd service templates and one lifecycle target are versioned under `deploy/`:
 
 1. `ai-fleet-observatory-vnc.service`
    - Runs as `agentrouter`.
@@ -65,9 +65,14 @@ Two systemd unit templates are versioned under `deploy/`:
    - Proxies only to loopback port 5900.
    - Restarts independently.
 
-Both units use systemd hardening consistent with the existing Observatory unit. Failure of either companion must not stop or restart the dashboard, scheduler, Antigravity probes, or AgentRouter worker.
+Both services use systemd hardening consistent with the existing Observatory unit. Failure of either companion must not stop or restart the dashboard, scheduler, Antigravity probes, or AgentRouter worker.
 
-The main staging unit uses systemd `Upholds=` to continuously restore either companion whenever Observatory is active. The Xeon runs systemd 255, satisfying the directive's systemd 249 minimum. This closes the automatic failure-restart path without making the main service depend on companion success.
+3. `ai-fleet-observatory-novnc.target`
+   - Requires the main Observatory service.
+   - Uses systemd `Upholds=` to restore either companion while the target is active.
+   - Owns companion lifecycle so stopping or disabling the target cleanly stops both services.
+
+The Xeon runs systemd 255, satisfying the `Upholds=` directive's systemd 249 minimum. The target closes the automatic failure-restart path without coupling main-service success to companion health.
 
 ## Data and Interaction Flow
 
@@ -104,9 +109,9 @@ The Ubuntu deployment guide must document:
 The change is complete only when all of these checks pass:
 
 1. `sh -n scripts/start-server.sh` succeeds.
-2. `systemd-analyze verify` accepts the Observatory and both companion unit files.
+2. `systemd-analyze verify` accepts the Observatory, both companion services, and the lifecycle target.
 3. The repository's Bun tests and TypeScript checks still pass.
-4. `ai-fleet-observatory`, `ai-fleet-observatory-vnc`, and `ai-fleet-observatory-novnc` are active.
+4. `ai-fleet-observatory`, `ai-fleet-observatory-novnc.target`, `ai-fleet-observatory-vnc`, and `ai-fleet-observatory-novnc` are active.
 5. Socket inspection shows ports 5900 and 6080 bound only to loopback.
 6. Tailscale Serve status contains the unchanged `/` and `/observatory/` handlers plus `/observatory-vnc/`.
 7. A tailnet browser opens the canonical URL and controls the worker's actual Xvfb canvas.
@@ -116,4 +121,4 @@ The change is complete only when all of these checks pass:
 
 ## Cleanup and Rollback
 
-The temporary SSH tunnel and ad-hoc bridge processes used during diagnosis are removed after the permanent services are live. Rollback removes only the `/observatory-vnc/` Serve path, disables the two companion units, restores the previous startup wrapper, and optionally removes the three Ubuntu packages. Existing Serve handlers and Observatory data remain untouched.
+The temporary SSH tunnel and ad-hoc bridge processes used during diagnosis are removed after the permanent services are live. Rollback removes only the `/observatory-vnc/` Serve path and disables the noVNC lifecycle target, which stops both companions without restarting Observatory. A full package rollback may also restore the previous startup wrapper and remove the three Ubuntu packages. Existing Serve handlers and Observatory data remain untouched.

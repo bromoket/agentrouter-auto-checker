@@ -3,7 +3,6 @@ Description=AI Fleet Observatory staging
 Documentation=https://github.com/bromoket/agentrouter-auto-checker
 After=network-online.target tailscaled.service
 Wants=network-online.target tailscaled.service
-Upholds=ai-fleet-observatory-vnc.service ai-fleet-observatory-novnc.service
 
 [Service]
 Type=simple

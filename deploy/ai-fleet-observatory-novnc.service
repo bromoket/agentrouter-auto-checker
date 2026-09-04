@@ -3,7 +3,7 @@ Description=AI Fleet Observatory staging noVNC gateway
 Documentation=https://github.com/bromoket/agentrouter-auto-checker
 After=network-online.target ai-fleet-observatory-vnc.service
 Wants=network-online.target ai-fleet-observatory-vnc.service
-PartOf=ai-fleet-observatory.service
+PartOf=ai-fleet-observatory-novnc.target
 
 [Service]
 Type=simple
@@ -35,6 +35,3 @@ MemoryMax=256M
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=ai-fleet-observatory-novnc
-
-[Install]
-WantedBy=multi-user.target

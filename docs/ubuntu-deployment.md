@@ -317,15 +317,16 @@ sudo apt-get install -y x11vnc novnc websockify
 sudo cp /opt/ai-fleet-observatory/deploy/ai-fleet-observatory.service /etc/systemd/system/
 sudo cp /opt/ai-fleet-observatory/deploy/ai-fleet-observatory-vnc.service /etc/systemd/system/
 sudo cp /opt/ai-fleet-observatory/deploy/ai-fleet-observatory-novnc.service /etc/systemd/system/
+sudo cp /opt/ai-fleet-observatory/deploy/ai-fleet-observatory-novnc.target /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable ai-fleet-observatory-vnc.service ai-fleet-observatory-novnc.service
+sudo systemctl enable ai-fleet-observatory-novnc.target
 sudo systemctl restart ai-fleet-observatory.service
-sudo systemctl start ai-fleet-observatory-vnc.service ai-fleet-observatory-novnc.service
+sudo systemctl start ai-fleet-observatory-novnc.target
 ```
 
-The main unit uses `Upholds=` to restore either companion while Observatory is active. This
-requires systemd 249 or newer; the staging Xeon runs systemd 255. Companion failure never
-propagates back to Observatory.
+The lifecycle target uses `Upholds=` to restore either companion while remote access is
+enabled. This requires systemd 249 or newer; the staging Xeon runs systemd 255. Companion
+failure never propagates back to Observatory, and disabling the target stops both companions.
 
 Add the noVNC mount without replacing the existing handlers:
 
@@ -348,6 +349,7 @@ Verify the services and loopback-only listeners:
 sudo ss -ltnp '( sport = :5900 or sport = :6080 )'
 systemctl --no-pager --full status \
   ai-fleet-observatory.service \
+  ai-fleet-observatory-novnc.target \
   ai-fleet-observatory-vnc.service \
   ai-fleet-observatory-novnc.service
 ```
@@ -357,9 +359,7 @@ path and disable only its companions:
 
 ```bash
 sudo tailscale serve --yes --https=443 --set-path=/observatory-vnc/ off
-sudo systemctl disable --now \
-  ai-fleet-observatory-novnc.service \
-  ai-fleet-observatory-vnc.service
+sudo systemctl disable --now ai-fleet-observatory-novnc.target
 sudo tailscale serve status --json
 ```
 
