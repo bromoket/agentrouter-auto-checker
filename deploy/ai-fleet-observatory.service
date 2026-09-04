@@ -13,6 +13,8 @@ EnvironmentFile=/etc/ai-fleet-observatory/env
 Environment=HOME=/var/lib/ai-fleet-observatory
 Environment=XDG_CACHE_HOME=/var/lib/ai-fleet-observatory/cache
 Environment=PLAYWRIGHT_BROWSERS_PATH=/var/lib/ai-fleet-observatory/ms-playwright
+Environment=XVFB_DISPLAY=99
+Environment=XVFB_AUTH_FILE=/run/ai-fleet-observatory/Xauthority
 ExecStart=/opt/ai-fleet-observatory/scripts/start-server.sh
 Restart=on-failure
 RestartSec=5
@@ -23,6 +25,7 @@ UMask=0077
 StateDirectory=ai-fleet-observatory
 CacheDirectory=ai-fleet-observatory
 RuntimeDirectory=ai-fleet-observatory
+RuntimeDirectoryMode=0700
 ReadWritePaths=/var/lib/ai-fleet-observatory
 ProtectSystem=strict
 ProtectHome=true
