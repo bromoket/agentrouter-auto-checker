@@ -1701,6 +1701,9 @@ async function runWorker({ account, config }) {
         const agentRouterOrigin = new URL(config.baseUrl).origin;
         const cleared = await context.clearCookies({ domain: new URL(agentRouterOrigin).hostname }).catch(() => 0);
         log(`[${account.label}] agentrouter cookies cleared (${cleared ?? "n/a"})`);
+        for (const call of result.apiCalls) {
+          if (call.source === "api-logout" && !call.ok && !call.recovered) call.recovered = true;
+        }
         await activePage.goto(`${config.baseUrl}/login`, {
           waitUntil: "domcontentloaded",
           timeout: config.requestTimeoutMs,
