@@ -209,14 +209,14 @@ Create `deploy/ai-fleet-observatory-novnc.target`:
 Description=AI Fleet Observatory staging noVNC access
 Documentation=https://github.com/bromoket/agentrouter-auto-checker
 After=ai-fleet-observatory.service
-Requires=ai-fleet-observatory.service
+Wants=ai-fleet-observatory.service
 Upholds=ai-fleet-observatory-vnc.service ai-fleet-observatory-novnc.service
 
 [Install]
 WantedBy=multi-user.target
 ```
 
-`Upholds=` requires systemd 249 or newer; the Xeon runs systemd 255. The target continuously restores either inactive or failed companion. `PartOf=` stops both companions when the target is stopped, while companion failure never propagates to the target or main service.
+`Upholds=` requires systemd 249 or newer; the Xeon runs systemd 255. The target continuously restores either inactive or failed companion and remains active across main-service restarts because it only `Wants=` Observatory. `PartOf=` stops both companions when the target is stopped, while companion failure never propagates to the target or main service.
 
 - [ ] **Step 4: Verify units on the Ubuntu target**
 

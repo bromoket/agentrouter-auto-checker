@@ -68,7 +68,7 @@ Two hardened systemd service templates and one lifecycle target are versioned un
 Both services use systemd hardening consistent with the existing Observatory unit. Failure of either companion must not stop or restart the dashboard, scheduler, Antigravity probes, or AgentRouter worker.
 
 3. `ai-fleet-observatory-novnc.target`
-   - Requires the main Observatory service.
+   - Wants the main Observatory service without being stopped by its restarts.
    - Uses systemd `Upholds=` to restore either companion while the target is active.
    - Owns companion lifecycle so stopping or disabling the target cleanly stops both services.
 

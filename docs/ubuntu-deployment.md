@@ -325,8 +325,9 @@ sudo systemctl start ai-fleet-observatory-novnc.target
 ```
 
 The lifecycle target uses `Upholds=` to restore either companion while remote access is
-enabled. This requires systemd 249 or newer; the staging Xeon runs systemd 255. Companion
-failure never propagates back to Observatory, and disabling the target stops both companions.
+enabled and remains active across Observatory restarts. This requires systemd 249 or newer;
+the staging Xeon runs systemd 255. Companion failure never propagates back to Observatory,
+and disabling the target stops both companions.
 
 Add the noVNC mount without replacing the existing handlers:
 
