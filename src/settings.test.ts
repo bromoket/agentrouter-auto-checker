@@ -24,12 +24,14 @@ describe("SettingsStore", () => {
   test("uses the exported defaults when optional values are invalid", () => {
     expect(validateAutomationSettings({
       intervalMinutes: "invalid",
+      endpointPollingEnabled: true,
       endpointPollIntervalMinutes: null,
       accountDelaySeconds: undefined,
       twoFactorTimeoutMinutes: Number.NaN,
       activityLookbackDays: {},
     })).toMatchObject({
       intervalMinutes: DEFAULT_AUTOMATION_SETTINGS.intervalMinutes,
+      endpointPollingEnabled: false,
       endpointPollIntervalMinutes: DEFAULT_AUTOMATION_SETTINGS.endpointPollIntervalMinutes,
       accountDelaySeconds: DEFAULT_AUTOMATION_SETTINGS.accountDelaySeconds,
       twoFactorTimeoutMinutes: DEFAULT_AUTOMATION_SETTINGS.twoFactorTimeoutMinutes,
@@ -44,6 +46,7 @@ describe("SettingsStore", () => {
     const saved = await store.save({
       schedulerEnabled: false,
       intervalMinutes: 1,
+      endpointPollingEnabled: true,
       accountDelaySeconds: 15,
       runOnStart: false,
       openDashboardOnStart: false,
@@ -53,6 +56,7 @@ describe("SettingsStore", () => {
       activityLookbackDays: 14,
     });
     expect(saved.intervalMinutes).toBe(5);
+    expect(saved.endpointPollingEnabled).toBe(false);
     expect(saved.twoFactorTimeoutMinutes).toBe(30);
     expect(saved.activityLookbackDays).toBe(14);
     expect(await store.load()).toEqual(saved);

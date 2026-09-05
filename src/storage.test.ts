@@ -125,17 +125,20 @@ describe("Store", () => {
     expect(history.metrics.statisticalTokens).toBe(1_000);
   });
 
-  test("rejects successful runs without verified money or browser session evidence", () => {
+  test("rejects successful runs without confirmed logout or verified money", () => {
     const store = createStore();
     expect(() => store.saveRun(snapshot({ loggedOut: false }))).toThrow(
-      "confirm AgentRouter logout or an intentionally retained authenticated session",
+      "confirm AgentRouter logout",
     );
-    expect(store.saveRun(snapshot({
+    expect(() => store.saveRun(snapshot({
       loggedOut: false,
       summary: { authentication: "retained-authenticated-session" },
-    }))).toBeGreaterThan(0);
+    }))).toThrow("confirm AgentRouter logout");
+    expect(() => store.saveRun(snapshot({
+      loggedOut: "true" as unknown as boolean,
+    }))).toThrow("confirm AgentRouter logout");
     expect(() => store.saveRun(snapshot({ metrics: {} }))).toThrow("finite balance");
-    expect(store.getRunStatusCounts()).toEqual({ successful: 1, failed: 0 });
+    expect(store.getRunStatusCounts()).toEqual({ successful: 0, failed: 0 });
   });
 
   test("persists a verified negative balance while rejecting negative consumption", () => {

@@ -273,32 +273,6 @@ async function persistGithubState(context, statePath) {
   }
 }
 
-function filterAgentRouterState(state, baseUrl) {
-  const host = new URL(baseUrl).hostname.toLowerCase();
-  return {
-    cookies: state.cookies.filter((cookie) => {
-      const domain = cookie.domain.replace(/^\./, "").toLowerCase();
-      return host === domain || host.endsWith(`.${domain}`);
-    }),
-    origins: state.origins.filter((entry) => entry.origin === baseUrl),
-  };
-}
-
-async function persistAgentRouterState(context, statePath, baseUrl) {
-  const state = filterAgentRouterState(await context.storageState(), baseUrl);
-  if (state.cookies.length === 0) {
-    throw new Error("Authenticated AgentRouter state did not contain reusable cookies.");
-  }
-  const temporaryPath = `${statePath}.${process.pid}.${randomUUID()}.tmp`;
-  try {
-    await writeFile(temporaryPath, `${JSON.stringify(state)}\n`, { mode: 0o600, flag: "wx" });
-    await restrictSecretFile(temporaryPath);
-    await rename(temporaryPath, statePath);
-    await restrictSecretFile(statePath);
-  } finally {
-    await unlink(temporaryPath).catch(() => undefined);
-  }
-}
 
 async function markProfileReady(profilePath) {
   const markerPath = path.join(profilePath, ".agentrouter-profile-ready");
@@ -1843,23 +1817,39 @@ async function runWorker({ account, config }) {
       result.apiCalls,
     ) ?? undefined;
 
-    await persistAgentRouterState(context, monitorStatePath, config.baseUrl);
+    progress(
+      "logging-out",
+      "Data captured. Logging out so the next scheduled sign-in can claim available grants.",
+      92,
+    );
+    result.loggedOut = await logoutAndPersist(
+      context,
+      activePage,
+      config,
+      authenticatedUserId,
+      statePath,
+      result.apiCalls,
+    );
+    if (!result.loggedOut) {
+      throw new Error("AgentRouter logout did not complete after data collection.");
+    }
+    try {
+      await unlink(monitorStatePath);
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error;
+    }
 
     const failedCall = result.apiCalls.find((call) => !call.ok && !call.recovered);
     if (failedCall) {
       throw new Error(`AgentRouter UI step failed: ${failedCall.path} returned ${failedCall.status}.`);
     }
-    result.loggedOut = preflightLoggedOut;
-    result.summary.authentication = "retained-authenticated-session";
-    log(
-      `[${account.label}] data saved and authenticated minute-poll session retained` +
-      (preflightLoggedOut ? " (prior session logged out)" : ""),
-    );
+    result.summary.authentication = "logged-out-after-collection";
+    log(`[${account.label}] data saved and AgentRouter logout confirmed`);
     progress(
       "complete",
       preflightLoggedOut
-        ? "Snapshot saved. Prior session logged out; the fresh authenticated session now feeds minute polling."
-        : "Snapshot saved. Authenticated session retained to feed minute polling.",
+        ? "Snapshot saved. Prior and current AgentRouter sessions logged out."
+        : "Snapshot saved. AgentRouter logout confirmed.",
       100,
     );
   } catch (error) {

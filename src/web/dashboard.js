@@ -2106,7 +2106,7 @@ async function saveAccount(event) {
 
 function openSettingsDialog() {
   const automation = state.settings?.automation; if (!automation) return;
-  byId("interval-minutes").value = automation.intervalMinutes; byId("endpoint-poll-interval").value = automation.endpointPollIntervalMinutes; byId("account-delay-seconds").value = automation.accountDelaySeconds; byId("two-factor-timeout").value = automation.twoFactorTimeoutMinutes; byId("activity-lookback").value = automation.activityLookbackDays; byId("scheduler-enabled").checked = automation.schedulerEnabled; byId("endpoint-polling-enabled").checked = automation.endpointPollingEnabled; byId("run-on-start").checked = automation.runOnStart; byId("open-on-start").checked = automation.openDashboardOnStart; byId("capture-screenshots").checked = automation.captureScreenshots; byId("settings-error").textContent = ""; showModal(byId("settings-dialog"), byId("interval-minutes"));
+  byId("interval-minutes").value = automation.intervalMinutes; byId("account-delay-seconds").value = automation.accountDelaySeconds; byId("two-factor-timeout").value = automation.twoFactorTimeoutMinutes; byId("activity-lookback").value = automation.activityLookbackDays; byId("scheduler-enabled").checked = automation.schedulerEnabled; byId("run-on-start").checked = automation.runOnStart; byId("open-on-start").checked = automation.openDashboardOnStart; byId("capture-screenshots").checked = automation.captureScreenshots; byId("settings-error").textContent = ""; showModal(byId("settings-dialog"), byId("interval-minutes"));
 }
 
 function settingsTab(name) {
@@ -2153,8 +2153,9 @@ function populateObservatorySettings() {
 
 async function saveSettings(event) {
   event.preventDefault();
+  const automation = state.settings?.automation; if (!automation) return;
   try {
-    const result = await api("/api/settings", { method: "PUT", body: { intervalMinutes: Number(byId("interval-minutes").value), endpointPollIntervalMinutes: Number(byId("endpoint-poll-interval").value), accountDelaySeconds: Number(byId("account-delay-seconds").value), twoFactorTimeoutMinutes: Number(byId("two-factor-timeout").value), activityLookbackDays: Number(byId("activity-lookback").value), schedulerEnabled: byId("scheduler-enabled").checked, endpointPollingEnabled: byId("endpoint-polling-enabled").checked, runOnStart: byId("run-on-start").checked, openDashboardOnStart: byId("open-on-start").checked, captureScreenshots: byId("capture-screenshots").checked } });
+    const result = await api("/api/settings", { method: "PUT", body: { intervalMinutes: Number(byId("interval-minutes").value), endpointPollIntervalMinutes: automation.endpointPollIntervalMinutes, accountDelaySeconds: Number(byId("account-delay-seconds").value), twoFactorTimeoutMinutes: Number(byId("two-factor-timeout").value), activityLookbackDays: Number(byId("activity-lookback").value), schedulerEnabled: byId("scheduler-enabled").checked, endpointPollingEnabled: false, runOnStart: byId("run-on-start").checked, openDashboardOnStart: byId("open-on-start").checked, captureScreenshots: byId("capture-screenshots").checked } });
     state.settings.automation = result.automation; closeModal(byId("settings-dialog")); showToast("Automation settings saved."); await loadCore(false);
   } catch (error) { byId("settings-error").textContent = error.message; }
 }

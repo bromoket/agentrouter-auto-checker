@@ -534,13 +534,8 @@ export class Store {
     if (snapshot.status === "ok") {
       const balance = Number(snapshot.metrics.balance);
       const consumed = Number(snapshot.metrics.consumed);
-      const lifecycle = snapshot.summary?.authentication;
-      const sessionConfirmed =
-        snapshot.loggedOut || lifecycle === "retained-authenticated-session";
-      if (!sessionConfirmed) {
-        throw new Error(
-          "A successful run must confirm AgentRouter logout or an intentionally retained authenticated session.",
-        );
+      if (snapshot.loggedOut !== true) {
+        throw new Error("A successful run must confirm AgentRouter logout.");
       }
       if (!Number.isFinite(balance) || !Number.isFinite(consumed) || consumed < 0) {
         throw new Error("A successful run must include a finite balance and finite, non-negative consumption metrics.");

@@ -690,8 +690,8 @@
           <small id="password-help">Required for a new account.</small>
         </label>
         <div class="info-callout">
-          <strong>Automatic API access</strong>
-          <p>The next successful browser cycle captures an active AgentRouter API token and starts read-only minute polling. Tokens stay in the protected credential file.</p>
+          <strong>Scheduled AgentRouter access</strong>
+          <p>Each browser cycle signs in, collects authoritative account data, captures the active API token, and confirms logout so the next scheduled sign-in can claim available grants.</p>
         </div>
         <div class="field-grid">
           <label>Run order
@@ -731,9 +731,6 @@
           <label>Cycle interval <span>minutes</span>
             <input id="interval-minutes" type="number" min="5" max="10080" step="1" required>
           </label>
-          <label>Endpoint poll interval <span>minutes</span>
-            <input id="endpoint-poll-interval" type="number" min="1" max="1440" step="1" required>
-          </label>
           <label>Account gap <span>seconds</span>
             <input id="account-delay-seconds" type="number" min="0" max="3600" step="1" required>
           </label>
@@ -748,14 +745,13 @@
 
         <div class="switch-grid">
           <label class="switch-row"><input id="scheduler-enabled" type="checkbox"><span class="switch"></span><span>Scheduled cycles</span></label>
-          <label class="switch-row"><input id="endpoint-polling-enabled" type="checkbox"><span class="switch"></span><span>Read-only endpoint polling</span></label>
           <label class="switch-row"><input id="run-on-start" type="checkbox"><span class="switch"></span><span>Run on startup</span></label>
           <label class="switch-row"><input id="open-on-start" type="checkbox"><span class="switch"></span><span>Open dashboard on startup</span></label>
           <label class="switch-row"><input id="capture-screenshots" type="checkbox"><span class="switch"></span><span>Capture screenshots</span></label>
         </div>
         <div class="info-callout">
-          <strong>Independent login and read-only polling schedules</strong>
-          <p>Browser cycles refresh GitHub and AgentRouter sessions, capture API access, and verify logout. Read-only polling refreshes balances between browser cycles.</p>
+          <strong>Grant-safe sign-in lifecycle</strong>
+          <p>Every successful browser cycle ends with confirmed AgentRouter logout. A cycle fails if logout cannot be confirmed, rather than storing an unverified success.</p>
         </div>
         <p id="settings-error" class="form-error" role="alert"></p>
         <div class="dialog-actions">

@@ -23,7 +23,7 @@ interface SettingsFile {
 export const DEFAULT_AUTOMATION_SETTINGS: AutomationSettings = {
   schedulerEnabled: true,
   intervalMinutes: 60,
-  endpointPollingEnabled: true,
+  endpointPollingEnabled: false,
   endpointPollIntervalMinutes: 1,
   accountDelaySeconds: 5,
   runOnStart: false,
@@ -63,10 +63,7 @@ export function validateAutomationSettings(value: unknown): AutomationSettings {
       5,
       10_080,
     ),
-    endpointPollingEnabled: booleanValue(
-      candidate.endpointPollingEnabled,
-      DEFAULT_AUTOMATION_SETTINGS.endpointPollingEnabled,
-    ),
+    endpointPollingEnabled: false,
     endpointPollIntervalMinutes: boundedInteger(
       candidate.endpointPollIntervalMinutes,
       DEFAULT_AUTOMATION_SETTINGS.endpointPollIntervalMinutes,
