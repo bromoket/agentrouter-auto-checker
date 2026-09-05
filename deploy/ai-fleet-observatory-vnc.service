@@ -3,7 +3,7 @@ Description=AI Fleet Observatory staging Xvfb VNC bridge
 Documentation=https://github.com/bromoket/agentrouter-auto-checker
 After=ai-fleet-observatory.service
 Requires=ai-fleet-observatory.service
-PartOf=ai-fleet-observatory.service ai-fleet-observatory-novnc.target
+PartOf=ai-fleet-observatory-novnc.target
 JoinsNamespaceOf=ai-fleet-observatory.service
 
 [Service]

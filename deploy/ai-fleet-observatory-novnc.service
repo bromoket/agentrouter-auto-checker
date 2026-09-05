@@ -10,7 +10,7 @@ Type=simple
 User=agentrouter
 Group=agentrouter
 ExecStart=/usr/bin/websockify --web=/usr/share/novnc 127.0.0.1:6080 127.0.0.1:15900
-Restart=on-failure
+Restart=always
 RestartSec=2
 UMask=0077
 NoNewPrivileges=true
