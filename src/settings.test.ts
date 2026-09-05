@@ -56,6 +56,7 @@ describe("SettingsStore", () => {
     expect(saved.twoFactorTimeoutMinutes).toBe(30);
     expect(saved.activityLookbackDays).toBe(14);
     expect(await store.load()).toEqual(saved);
+    expect("browserHeadless" in saved).toBe(false);
   });
 
   test("loads the production server settings template", async () => {
@@ -67,7 +68,7 @@ describe("SettingsStore", () => {
 
     expect(settings.schedulerEnabled).toBe(true);
     expect(settings.openDashboardOnStart).toBe(false);
-    expect(settings.browserHeadless).toBe(true);
+    expect("browserHeadless" in settings).toBe(false);
     expect(settings.activityLookbackDays).toBe(28);
     expect(settings.captureScreenshots).toBe(false);
   });

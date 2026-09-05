@@ -10,7 +10,6 @@ export interface AutomationSettings {
   accountDelaySeconds: number;
   runOnStart: boolean;
   openDashboardOnStart: boolean;
-  browserHeadless: boolean;
   twoFactorTimeoutMinutes: number;
   captureScreenshots: boolean;
   activityLookbackDays: number;
@@ -29,7 +28,6 @@ export const DEFAULT_AUTOMATION_SETTINGS: AutomationSettings = {
   accountDelaySeconds: 5,
   runOnStart: false,
   openDashboardOnStart: true,
-  browserHeadless: false,
   twoFactorTimeoutMinutes: 5,
   captureScreenshots: false,
   activityLookbackDays: 7,
@@ -85,10 +83,6 @@ export function validateAutomationSettings(value: unknown): AutomationSettings {
     openDashboardOnStart: booleanValue(
       candidate.openDashboardOnStart,
       DEFAULT_AUTOMATION_SETTINGS.openDashboardOnStart,
-    ),
-    browserHeadless: booleanValue(
-      candidate.browserHeadless,
-      DEFAULT_AUTOMATION_SETTINGS.browserHeadless,
     ),
     twoFactorTimeoutMinutes: boundedInteger(
       candidate.twoFactorTimeoutMinutes,

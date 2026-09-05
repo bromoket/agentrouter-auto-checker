@@ -11,6 +11,7 @@ import {
   parseAgentRouterUserId,
   parseLabeledNumber,
 } from "./agentrouter-money.mjs";
+import { connectNativeChrome } from "./native-chrome-client.mjs";
 
 const USAGE_WINDOWS = [
   { granularity: "hour", seconds: 24 * 60 * 60 },
@@ -75,26 +76,23 @@ async function fileExists(filePath) {
 }
 
 async function launchAccountContext(profilePath, config) {
-  const launchOptions = {
-    channel: config.browserChannel,
-    headless: config.browserHeadless,
-    args: config.disableWebAuthn
-      ? ["--disable-features=WebAuthentication,WebAuthenticationUI,WebAuthenticationConditionalUI"]
-      : [],
-  };
   let lastError;
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     try {
-      return {
-        context: await chromium.launchPersistentContext(profilePath, launchOptions),
-        attempts: attempt,
-      };
+      const connected = await connectNativeChrome(chromium, {
+        executablePath: config.browserExecutable,
+        userDataDir: profilePath,
+        port: config.browserWorkerCdpPort,
+        startupTimeoutMs: config.browserStartTimeoutMs,
+      });
+      return { ...connected, attempts: attempt };
     } catch (error) {
       lastError = error;
       const message = error instanceof Error ? error.message : String(error);
-      const retryable = /target page, context or browser has been closed|browser closed|failed to launch/i.test(message);
+      const retryable =
+        /browser has been closed|browser closed|failed to launch|before readiness|attach|CDP|timeout/i.test(message);
       if (!retryable || attempt === 2) throw error;
-      progress("launch-retry", "Chromium exited during launch; retrying the isolated profile once.", 6);
+      progress("launch-retry", "Google Chrome exited during startup; retrying the isolated profile once.", 6);
       await wait(1_500);
       throwIfCancelled();
     }
@@ -1187,11 +1185,6 @@ async function readTopLevelJson(page) {
 }
 
 async function completeAgentRouterAccessVerification(context, page, account, config, userId, apiCalls) {
-  if (config.browserHeadless) {
-    throw new Error(
-      "AgentRouter returned its Access Verification slider. Complete it in the server browser so the persistent profile can retain the verification state.",
-    );
-  }
 
   const verificationPage = await context.newPage();
   const started = Date.now();
@@ -1603,6 +1596,7 @@ async function runWorker({ account, config }) {
     screenshotPath: undefined,
   };
 
+  let browserLifecycle;
   let context;
   let launchAttempts = 0;
   let activePage;
@@ -1622,9 +1616,10 @@ async function runWorker({ account, config }) {
     const profileAvailable = await fileExists(profileMarkerPath);
     await mkdir(profilePath, { recursive: true });
     await restrictSecretDirectory(profilePath);
-    log(`[${account.label}] launching dedicated persistent ${config.browserChannel} profile`);
-    progress("launching", `Launching the account's dedicated persistent ${config.browserChannel} profile.`, 6);
+    log(`[${account.label}] launching dedicated persistent Google Chrome profile`);
+    progress("launching", "Launching the account's dedicated persistent Google Chrome profile.", 6);
     const launched = await launchAccountContext(profilePath, config);
+    browserLifecycle = launched;
     context = launched.context;
     launchAttempts = launched.attempts;
 
@@ -1633,30 +1628,6 @@ async function runWorker({ account, config }) {
     if (!profileAvailable && storedGithubState) {
       await context.addCookies(storedGithubState.cookies);
       log(`[${account.label}] migrated the previous GitHub cookie backup into the persistent profile`);
-    }
-    if (config.disableWebAuthn) {
-      await context.addInitScript(() => {
-        const credentials = navigator.credentials;
-        if (!credentials) return;
-        const originalGet = credentials.get.bind(credentials);
-        const originalCreate = credentials.create.bind(credentials);
-        credentials.get = (options) => {
-          if (options && typeof options === "object" && "publicKey" in options) {
-            return Promise.reject(
-              new DOMException("WebAuthn is disabled in this automation session.", "NotAllowedError"),
-            );
-          }
-          return originalGet(options);
-        };
-        credentials.create = (options) => {
-          if (options && typeof options === "object" && "publicKey" in options) {
-            return Promise.reject(
-              new DOMException("WebAuthn is disabled in this automation session.", "NotAllowedError"),
-            );
-          }
-          return originalCreate(options);
-        };
-      });
     }
     activePage = context.pages().find((candidate) => !candidate.isClosed()) ?? await context.newPage();
 
@@ -1965,7 +1936,7 @@ async function runWorker({ account, config }) {
       }
     }
   } finally {
-    await context?.close().catch(() => undefined);
+    await browserLifecycle?.close().catch(() => undefined);
   }
 
   result.endedAt = new Date().toISOString();

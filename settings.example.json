@@ -6,7 +6,6 @@
     "accountDelaySeconds": 5,
     "runOnStart": false,
     "openDashboardOnStart": true,
-    "browserHeadless": true,
     "twoFactorTimeoutMinutes": 5,
     "captureScreenshots": false,
     "activityLookbackDays": 7

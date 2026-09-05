@@ -19,12 +19,12 @@ type WorkerPayload = {
     baseUrl: string;
     requestTimeoutMs: number;
     loginTimeoutMs: number;
-    browserHeadless: boolean;
+    browserExecutable: string;
+    browserWorkerCdpPort: number;
+    browserStartTimeoutMs: number;
     screenshotDir: string;
     accountStateDir: string;
     browserProfileDir: string;
-    browserChannel: string;
-    disableWebAuthn: boolean;
     authChallengeTimeoutMs: number;
     captureScreenshots: boolean;
     activityLookbackDays: number;
@@ -82,12 +82,12 @@ export async function runSingleAccountCheck(
       baseUrl: config.baseUrl,
       requestTimeoutMs: config.requestTimeoutMs,
       loginTimeoutMs: config.loginTimeoutMs,
-      browserHeadless: settings.browserHeadless,
+      browserExecutable: config.browserExecutable,
+      browserWorkerCdpPort: config.browserWorkerCdpPort,
+      browserStartTimeoutMs: config.browserStartTimeoutMs,
       screenshotDir: config.screenshotDir,
       accountStateDir: config.accountStateDir,
       browserProfileDir: config.browserProfileDir,
-      browserChannel: config.browserChannel,
-      disableWebAuthn: config.disableWebAuthn,
       authChallengeTimeoutMs: settings.twoFactorTimeoutMinutes * 60_000,
       captureScreenshots: settings.captureScreenshots,
       activityLookbackDays: settings.activityLookbackDays,

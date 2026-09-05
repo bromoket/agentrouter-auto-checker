@@ -7,7 +7,7 @@ import { SettingsStore } from "../src/settings";
 const config = loadConfig();
 const selector = process.argv[2]?.trim();
 if (!selector) {
-  throw new Error("Usage: bun run probe:headless <account-id-or-github-username>");
+  throw new Error("Usage: bun run probe:browser <account-id-or-github-username>");
 }
 
 const accountStore = new AccountStore(config.accountFilePath);
@@ -21,12 +21,11 @@ if (!account) {
 const savedSettings = await new SettingsStore(config.settingsFilePath).load();
 const settings = {
   ...savedSettings,
-  browserHeadless: true,
   captureScreenshots: true,
 };
 const challenges = new AuthenticationChallengeBroker();
 
-process.stdout.write(`Headless probe starting for ${account.label}; production SQLite will not be modified.\n`);
+process.stdout.write(`Native browser probe starting for ${account.label}; production SQLite will not be modified.\n`);
 const result = await runSingleAccountCheck(account, config, settings, challenges, {
   onProgress(progress) {
     process.stdout.write(`[${progress.percent}%] ${progress.stage}: ${progress.message}\n`);

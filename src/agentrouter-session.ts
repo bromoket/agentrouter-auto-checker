@@ -3,6 +3,11 @@ import { join } from "node:path";
 import type { Browser, BrowserContext, Page } from "playwright";
 import type { GitHubAccount } from "./accounts";
 import type { AppConfig } from "./config";
+import {
+  connectNativeChrome,
+  type NativeChromeConnection,
+  type NativeChromeHostConfig,
+} from "../scripts/native-chrome-client.mjs";
 
 export const AGENTROUTER_SESSION_DEAD_MARKER =
   "AgentRouter read session is no longer authenticated.";
@@ -73,27 +78,46 @@ async function readStoredUserId(statePath: string, baseUrl: string): Promise<str
   );
 }
 
-interface LaunchOptions {
-  channel: string;
-}
+type PollerConnection = Pick<NativeChromeConnection, "browser" | "close">;
 
 export class DefaultAgentRouterReadSessions implements AgentRouterReadSessions {
-  private browser: Browser | null = null;
+  private connection: PollerConnection | null = null;
+  private browserStart: Promise<Browser> | null = null;
   private readonly runtimes = new Map<string, AccountRuntime>();
-  private readonly launch: (options: LaunchOptions) => Promise<Browser>;
+  private readonly connect: (config: NativeChromeHostConfig) => Promise<PollerConnection>;
 
-  constructor(launch?: (options: LaunchOptions) => Promise<Browser>) {
-    this.launch = launch ?? (async (options) => {
+  constructor(connect?: (config: NativeChromeHostConfig) => Promise<PollerConnection>) {
+    this.connect = connect ?? (async (config) => {
       const { chromium } = await import("playwright");
-      return chromium.launch({ channel: options.channel, headless: true });
+      return connectNativeChrome(chromium, config);
     });
   }
 
+  private async resetBrowser(): Promise<void> {
+    await Promise.all([...this.runtimes.keys()].map((id) => this.drop(id)));
+    const connection = this.connection;
+    this.connection = null;
+    if (connection) await connection.close().catch(() => undefined);
+  }
+
   private async browserInstance(config: AppConfig): Promise<Browser> {
-    if (this.browser === null || !this.browser.isConnected()) {
-      this.browser = await this.launch({ channel: config.browserChannel });
+    if (this.connection?.browser.isConnected()) return this.connection.browser;
+    if (this.browserStart === null) {
+      this.browserStart = (async () => {
+        await this.resetBrowser();
+        const connection = await this.connect({
+          executablePath: config.browserExecutable,
+          userDataDir: config.browserPollerProfileDir,
+          port: config.browserPollerCdpPort,
+          startupTimeoutMs: config.browserStartTimeoutMs,
+        });
+        this.connection = connection;
+        return connection.browser;
+      })().finally(() => {
+        this.browserStart = null;
+      });
     }
-    return this.browser;
+    return this.browserStart;
   }
 
   private async runtime(account: GitHubAccount, config: AppConfig): Promise<AccountRuntime> {
@@ -107,7 +131,12 @@ export class DefaultAgentRouterReadSessions implements AgentRouterReadSessions {
       );
     }
     const existing = this.runtimes.get(account.id);
-    if (existing && existing.stateMtimeMs === stateMtimeMs && existing.context) {
+    if (
+      existing &&
+      existing.stateMtimeMs === stateMtimeMs &&
+      existing.context &&
+      this.connection?.browser.isConnected()
+    ) {
       return existing;
     }
     await this.drop(account.id);
@@ -229,11 +258,7 @@ export class DefaultAgentRouterReadSessions implements AgentRouterReadSessions {
   }
 
   async close(): Promise<void> {
-    await Promise.all([...this.runtimes.keys()].map((id) => this.drop(id)));
-    const browser = this.browser;
-    this.browser = null;
-    if (browser) {
-      await browser.close().catch(() => undefined);
-    }
+    await this.browserStart?.catch(() => undefined);
+    await this.resetBrowser();
   }
 }

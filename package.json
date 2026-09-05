@@ -18,7 +18,7 @@
     "audit:observatory": "bun run scripts/db-audit.mjs --observatory",
     "backup:observatory": "bun run scripts/db-backup.mjs --observatory",
     "restore:observatory": "bun run scripts/db-restore.mjs --observatory",
-    "probe:headless": "bun run scripts/headless-probe.ts",
+    "probe:browser": "bun run scripts/browser-probe.ts",
     "telegram:test": "bun run scripts/telegram-test.ts",
     "typecheck": "bun x tsc --noEmit",
     "test": "bun test",

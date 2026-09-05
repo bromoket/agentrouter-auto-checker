@@ -60,6 +60,62 @@ describe("loadConfig dashboard network controls", () => {
   });
 });
 
+
+describe("loadConfig native Chrome controls", () => {
+  test("uses isolated loopback CDP defaults", () => {
+    delete process.env.BROWSER_EXECUTABLE;
+    delete process.env.BROWSER_PROFILE_DIR;
+    delete process.env.BROWSER_WORKER_CDP_PORT;
+    delete process.env.BROWSER_POLLER_CDP_PORT;
+    delete process.env.BROWSER_START_TIMEOUT_MS;
+    delete process.env.BROWSER_POLLER_PROFILE_DIR;
+
+    const config = loadConfig();
+    expect(config.browserExecutable).toBe("/usr/bin/google-chrome-stable");
+    expect(config.browserProfileDir).toContain("browser-profiles");
+    expect(config.browserWorkerCdpPort).toBe(19_222);
+    expect(config.browserPollerCdpPort).toBe(19_223);
+    expect(config.browserStartTimeoutMs).toBe(30_000);
+    expect(config.browserPollerProfileDir).toContain("poller-browser-profile");
+    expect("browserChannel" in config).toBe(false);
+    expect("disableWebAuthn" in config).toBe(false);
+  });
+
+  test("rejects invalid paths, ports, collisions, and timeouts", () => {
+    process.env.BROWSER_EXECUTABLE = "google-chrome";
+    expect(() => loadConfig()).toThrow("BROWSER_EXECUTABLE must be an absolute path");
+
+    process.env.BROWSER_EXECUTABLE = "/usr/bin/google-chrome-stable";
+    process.env.BROWSER_PROFILE_DIR = "relative/browser-profile";
+    expect(() => loadConfig()).toThrow("BROWSER_PROFILE_DIR must be an absolute path");
+    delete process.env.BROWSER_PROFILE_DIR;
+
+    process.env.BROWSER_WORKER_CDP_PORT = "1023";
+    expect(() => loadConfig()).toThrow("BROWSER_WORKER_CDP_PORT");
+
+    process.env.BROWSER_WORKER_CDP_PORT = "19223";
+    process.env.BROWSER_POLLER_CDP_PORT = "19223";
+    expect(() => loadConfig()).toThrow("must be distinct");
+
+    process.env.BROWSER_WORKER_CDP_PORT = "6080";
+    process.env.BROWSER_POLLER_CDP_PORT = "19223";
+    expect(() => loadConfig()).toThrow("collides with a reserved service port");
+
+    process.env.BROWSER_WORKER_CDP_PORT = "19222";
+    process.env.BROWSER_START_TIMEOUT_MS = "999";
+    expect(() => loadConfig()).toThrow("BROWSER_START_TIMEOUT_MS");
+  });
+
+  test("keeps the poller profile inside DATA_DIR", () => {
+    process.env.DATA_DIR = process.platform === "win32" ? "C:\\observatory\\data" : "/var/lib/observatory/data";
+    process.env.BROWSER_POLLER_PROFILE_DIR = process.platform === "win32"
+      ? "C:\\observatory\\outside"
+      : "/var/lib/observatory/outside";
+
+    expect(() => loadConfig()).toThrow("BROWSER_POLLER_PROFILE_DIR must remain inside DATA_DIR");
+  });
+});
+
 describe("loadConfig Telegram controls", () => {
   test("keeps Telegram disabled when no recipient is configured", () => {
     delete process.env.TELEGRAM_BOT_TOKEN;

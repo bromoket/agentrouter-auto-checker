@@ -1,8 +1,8 @@
 # Ubuntu deployment and operations
 
-The production layout uses a native `systemd` service instead of Docker. Persistent Chromium profiles and
-Playwright's browser sandbox are simpler to operate this way, while the dedicated `agentrouter` account and
-systemd hardening keep the monitor isolated from the other Xeon workloads.
+The production layout uses a native `systemd` service instead of Docker. AgentRouter checks run
+official Google Chrome Stable under Xvfb and attach through loopback CDP without Playwright launch
+defaults. The dedicated `agentrouter` account and systemd hardening isolate it from other Xeon workloads.
 
 ---
 
@@ -20,7 +20,7 @@ stable and isolated from testing or staging workloads.
 | **Runtime Data Directory** | `/var/lib/agentrouter-monitor/data` | `/var/lib/ai-fleet-observatory/data` |
 | **Database Path** | `/var/lib/agentrouter-monitor/data/checks.sqlite` | `/var/lib/ai-fleet-observatory/data/checks.sqlite` and `/var/lib/ai-fleet-observatory/data/observatory.sqlite` |
 | **Backups Directory** | `/var/lib/agentrouter-monitor/data/backups` | `/var/lib/ai-fleet-observatory/data/backups` |
-| **Playwright Browsers** | `/var/lib/agentrouter-monitor/ms-playwright` | `/var/lib/ai-fleet-observatory/ms-playwright` |
+| **AgentRouter Browsers** | Google Chrome Stable; profiles under the runtime data directory | Google Chrome Stable; profiles under the runtime data directory |
 | **Dashboard Binding** | `http://100.127.29.78:8456` (Tailscale) | `http://127.0.0.1:8458` (Tailscale Serve HTTPS) |
 | **Telegram Alerts** | Production Bot / Chat ID | Dedicated staging bot or disabled |
 
@@ -45,13 +45,22 @@ sudo git clone git@github.com:bromoket/agentrouter-auto-checker.git /opt/agentro
 cd /opt/agentrouter-monitor
 ```
 
-### Step 3: Install runtimes and dependencies
-Install Bun (1.3.14+) at `/usr/local/bin/bun` and private Node.js 24 LTS runtime at `/opt/agentrouter-runtime/node`:
+### Step 3: Install runtimes, Google Chrome Stable, and dependencies
+Install Bun (1.3.14+) at `/usr/local/bin/bun`, the private Node.js 24 LTS runtime at
+`/opt/agentrouter-runtime/node`, and Google's current official 64-bit stable Debian package:
 ```bash
+curl --fail --location --output /tmp/google-chrome-stable_current_amd64.deb \
+  https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+sudo apt-get install -y /tmp/google-chrome-stable_current_amd64.deb
+/usr/bin/google-chrome-stable --version
 sudo bun install --frozen-lockfile
 sudo bunx playwright install-deps chromium
 sudo -u agentrouter PLAYWRIGHT_BROWSERS_PATH=/var/lib/agentrouter-monitor/ms-playwright bunx playwright install chromium
 ```
+
+AgentRouter browser processes must use only loopback CDP ports 19222 and 19223. Never add either
+port to Tailscale Serve, nginx, a LAN bind, or a firewall exposure. Chrome's sandbox remains enabled;
+a sandbox startup failure is an operational error, not a reason to add `--no-sandbox`.
 
 ### Step 4: Configure environment metadata (Root-owned mode `0600`)
 The environment configuration file `/etc/agentrouter-monitor/env` must be owned by `root:root` with permissions `0600`.
@@ -76,7 +85,7 @@ sudo chmod 0600 /var/lib/agentrouter-monitor/data/settings.json
 Key production settings in `/var/lib/agentrouter-monitor/data/settings.json`:
 - `automation.schedulerEnabled: true` — enables automated hourly checks
 - `automation.intervalMinutes: 60` — interval between routine checks
-- `automation.browserHeadless: true` — runs headless Chromium under Xvfb
+- AgentRouter full checks always run headed Google Chrome Stable under Xvfb; there is no headless setting
 - `automation.runOnStart: false` — prevents immediate check burst on service boot
 
 ### Step 6: Install accounts file
@@ -243,6 +252,29 @@ sudo systemctl status agentrouter-monitor
 sudo journalctl -u agentrouter-monitor -f
 curl --fail http://100.127.29.78:8456/api/health
 ```
+
+### Native Chrome verification and rollback
+
+During an account check, port 19222 may listen only on `127.0.0.1`. During read-only endpoint
+polling, port 19223 may listen only on `127.0.0.1`. Inspect the live browser without printing its
+environment or profile contents:
+
+```bash
+sudo ss -ltnp '( sport = :19222 or sport = :19223 )'
+curl --fail http://127.0.0.1:19222/json/version
+ps -eo user,pid,args | grep '[g]oogle-chrome'
+```
+
+The executable preflight must report `Google Chrome`, `/json/version` must report `Chrome/<version>`,
+and the process arguments must contain only the configured user-data directory, loopback remote
+debugging address/port, `--no-first-run`, and `--no-default-browser-check`. A full-check profile is
+account-specific; the poller profile is separate. Stopping the cycle must remove port 19222 before
+the next account starts. Neither CDP port may appear in `tailscale serve status --json`.
+
+Rollback the code to the previous reviewed revision, restore `BROWSER_CHANNEL=chromium` and
+`DISABLE_WEBAUTHN=true`, restore `automation.browserHeadless=false` in the previous settings/API/UI
+shape, remove the five native-browser keys, and restart the service. Google Chrome may remain
+installed but unused. Never delete browser profiles, saved states, or runtime databases during rollback.
 
 ### Health Check Limitations
 The `/api/health` endpoint verifies:

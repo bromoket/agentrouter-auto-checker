@@ -1,6 +1,6 @@
 import { isIP } from "node:net";
 import { hostname } from "node:os";
-import { isAbsolute } from "node:path";
+import { isAbsolute, relative, resolve, sep } from "node:path";
 import {
   ANTIGRAVITY_CLIENT_ID,
   ANTIGRAVITY_REDIRECT_URI,
@@ -18,12 +18,15 @@ export interface AppConfig {
   screenshotDir: string;
   accountStateDir: string;
   browserProfileDir: string;
-  browserChannel: string;
+  browserExecutable: string;
+  browserWorkerCdpPort: number;
+  browserPollerCdpPort: number;
+  browserStartTimeoutMs: number;
+  browserPollerProfileDir: string;
   accountFilePath: string;
   settingsFilePath: string;
   dbPath: string;
   maxRecentRuns: number;
-  disableWebAuthn: boolean;
   telegram: TelegramConfig;
   ompQuota: OmpQuotaConfig;
   observatory: ObservatoryConfig;
@@ -489,6 +492,120 @@ function loadAntigravityConfig(
     oauthRedirectUri: process.env.ANTIGRAVITY_OAUTH_REDIRECT_URI?.trim() || ANTIGRAVITY_REDIRECT_URI,
   };
 }
+
+function parseRequiredBoundedInteger(
+  name: string,
+  fallback: number,
+  minimum: number,
+  maximum: number,
+): number {
+  const raw = process.env[name]?.trim();
+  if (!raw) return fallback;
+  const parsed = Number(raw);
+  if (!Number.isSafeInteger(parsed) || parsed < minimum || parsed > maximum) {
+    throw new Error(`${name} must be an integer between ${minimum} and ${maximum}.`);
+  }
+  return parsed;
+}
+
+function isPortableAbsolutePath(value: string): boolean {
+  return isAbsolute(value) || /^\/[^/]/.test(value);
+}
+
+function loadNativeBrowserConfig(
+  dataDir: string,
+  dashboardPort: number,
+  collectorPort: number,
+  brokerUrl: string | null,
+): Pick<
+  AppConfig,
+  | "browserProfileDir"
+  | "browserExecutable"
+  | "browserWorkerCdpPort"
+  | "browserPollerCdpPort"
+  | "browserStartTimeoutMs"
+  | "browserPollerProfileDir"
+> {
+  const browserExecutable =
+    process.env.BROWSER_EXECUTABLE?.trim() || "/usr/bin/google-chrome-stable";
+  if (!isPortableAbsolutePath(browserExecutable)) {
+    throw new Error("BROWSER_EXECUTABLE must be an absolute path.");
+  }
+
+  const browserWorkerCdpPort = parseRequiredBoundedInteger(
+    "BROWSER_WORKER_CDP_PORT",
+    19_222,
+    1_024,
+    65_535,
+  );
+  const browserPollerCdpPort = parseRequiredBoundedInteger(
+    "BROWSER_POLLER_CDP_PORT",
+    19_223,
+    1_024,
+    65_535,
+  );
+  if (browserWorkerCdpPort === browserPollerCdpPort) {
+    throw new Error("BROWSER_WORKER_CDP_PORT and BROWSER_POLLER_CDP_PORT must be distinct.");
+  }
+
+  const brokerPort = brokerUrl
+    ? Number(new URL(brokerUrl).port || (new URL(brokerUrl).protocol === "https:" ? 443 : 80))
+    : null;
+  const reservedPorts = new Set([
+    dashboardPort,
+    collectorPort,
+    6_080,
+    15_900,
+    ...(brokerPort === null ? [] : [brokerPort]),
+  ]);
+  if (reservedPorts.has(browserWorkerCdpPort) || reservedPorts.has(browserPollerCdpPort)) {
+    throw new Error("A browser CDP port collides with a reserved service port.");
+  }
+
+  const browserStartTimeoutMs = parseRequiredBoundedInteger(
+    "BROWSER_START_TIMEOUT_MS",
+    30_000,
+    1_000,
+    120_000,
+  );
+  const resolvedDataDir = resolve(dataDir);
+  const configuredAccountProfile = process.env.BROWSER_PROFILE_DIR?.trim();
+  if (configuredAccountProfile && !isPortableAbsolutePath(configuredAccountProfile)) {
+    throw new Error("BROWSER_PROFILE_DIR must be an absolute path.");
+  }
+  const browserProfileDir = configuredAccountProfile ?? resolve(resolvedDataDir, "browser-profiles");
+  const relativeAccountProfile = relative(resolvedDataDir, resolve(browserProfileDir));
+  if (
+    relativeAccountProfile === ".." ||
+    relativeAccountProfile.startsWith(`..${sep}`) ||
+    isAbsolute(relativeAccountProfile)
+  ) {
+    throw new Error("BROWSER_PROFILE_DIR must remain inside DATA_DIR.");
+  }
+  const configuredPollerProfile = process.env.BROWSER_POLLER_PROFILE_DIR?.trim();
+  if (configuredPollerProfile && !isPortableAbsolutePath(configuredPollerProfile)) {
+    throw new Error("BROWSER_POLLER_PROFILE_DIR must be an absolute path.");
+  }
+  const browserPollerProfileDir = configuredPollerProfile ?? resolve(resolvedDataDir, "poller-browser-profile");
+  const relativeProfile = relative(resolvedDataDir, resolve(browserPollerProfileDir));
+  if (
+    relativeProfile === ".." ||
+    relativeProfile.startsWith(`..${sep}`) ||
+    isAbsolute(relativeProfile)
+  ) {
+    throw new Error("BROWSER_POLLER_PROFILE_DIR must remain inside DATA_DIR.");
+  }
+
+  return {
+    browserProfileDir,
+    browserExecutable,
+    browserWorkerCdpPort,
+    browserPollerCdpPort,
+    browserStartTimeoutMs,
+    browserPollerProfileDir,
+  };
+}
+
 export function loadConfig(): AppConfig {
   const dataDir = process.env.DATA_DIR?.trim() || "data";
   const dashboardPort = parsePositiveInteger("DASHBOARD_PORT", 3100);
@@ -503,6 +620,12 @@ export function loadConfig(): AppConfig {
   const observatory = loadObservatoryConfig(dataDir, ompQuota, dbPath);
   const antigravity = loadAntigravityConfig(dataDir, observatory, dbPath);
   const collector = loadCollectorConfig();
+  const nativeBrowser = loadNativeBrowserConfig(
+    dataDir,
+    dashboardPort,
+    collector.port,
+    ompQuota.brokerUrl,
+  );
   if (collector.enabled && !observatory.enabled) {
     throw new Error("Collector ingestion requires Observatory to be enabled with its separate database.");
   }
@@ -536,13 +659,11 @@ export function loadConfig(): AppConfig {
     dataDir,
     screenshotDir: process.env.SCREENSHOT_DIR?.trim() || `${dataDir}/screenshots`,
     accountStateDir: process.env.ACCOUNT_STATE_DIR?.trim() || `${dataDir}/states`,
-    browserProfileDir: process.env.BROWSER_PROFILE_DIR?.trim() || `${dataDir}/browser-profiles`,
-    browserChannel: process.env.BROWSER_CHANNEL?.trim() || "chromium",
+    ...nativeBrowser,
     accountFilePath: process.env.ACCOUNT_FILE?.trim() || `${dataDir}/accounts.json`,
     settingsFilePath: process.env.SETTINGS_FILE?.trim() || `${dataDir}/settings.json`,
     dbPath,
     maxRecentRuns: parsePositiveInteger("MAX_RECENT_RUNS", 500),
-    disableWebAuthn: parseBoolean("DISABLE_WEBAUTHN", true),
     telegram: loadTelegramConfig(dataDir, dashboardHost, dashboardPort),
     ompQuota,
     observatory,

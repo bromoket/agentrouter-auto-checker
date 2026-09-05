@@ -332,10 +332,7 @@ export class CheckCoordinator {
     }
   }
 
-  async runCycle(
-    accountId?: string,
-    options: { browserHeadless?: boolean } = {},
-  ): Promise<boolean> {
+  async runCycle(accountId?: string): Promise<boolean> {
     if (this.cycleClaimed) {
       return false;
     }
@@ -382,9 +379,7 @@ export class CheckCoordinator {
         at: cycleStartedAt,
       });
       console.log(`[${cycleStartedAt}] starting check cycle (${selected.length} account(s))`);
-      const runSettings: AutomationSettings = options.browserHeadless === undefined
-        ? automation
-        : { ...automation, browserHeadless: options.browserHeadless };
+      const runSettings: AutomationSettings = automation;
 
       for (const [accountIndex, account] of selected.entries()) {
         if (this.activeAbortController.signal.aborted) break;
