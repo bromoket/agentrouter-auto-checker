@@ -56,6 +56,7 @@ function readBoundedLine(stream, child, stderrText) {
       stream.off("data", onData);
       stream.off("end", onEnd);
       stream.off("error", onError);
+      child.off("error", onChildError);
       child.off("exit", onExit);
     };
     const fail = (error) => {
@@ -75,6 +76,7 @@ function readBoundedLine(stream, child, stderrText) {
     };
     const onEnd = () => fail(new Error(`Native Chrome host closed stdout before readiness${stderrText()}.`));
     const onError = (error) => fail(error);
+    const onChildError = (error) => fail(error);
     const onExit = (code, signal) => fail(new Error(
       `Native Chrome host exited before readiness (code ${code ?? "none"}, signal ${signal ?? "none"})${stderrText()}.`,
     ));
@@ -82,6 +84,7 @@ function readBoundedLine(stream, child, stderrText) {
     stream.once("end", onEnd);
     stream.once("error", onError);
     child.once("exit", onExit);
+    child.once("error", onChildError);
   });
 }
 
@@ -113,18 +116,20 @@ export async function startNativeChromeHost(config, options = {}) {
     const concise = stderr.trim().replace(/\s+/g, " ");
     return concise ? `: ${concise.slice(-1_000)}` : "";
   };
-  let stopped = false;
-  const stop = async () => {
-    if (stopped) return;
-    stopped = true;
-    child.stdin.end();
-    if (await waitForChildExit(child, 12_000)) return;
-    child.kill("SIGTERM");
-    if (await waitForChildExit(child, 5_000)) return;
-    child.kill("SIGKILL");
-    await waitForChildExit(child, 5_000);
+  let stopPromise = null;
+  const stop = () => {
+    stopPromise ??= (async () => {
+      child.stdin.end();
+      if (await waitForChildExit(child, 12_000)) return;
+      child.kill("SIGTERM");
+      if (await waitForChildExit(child, 5_000)) return;
+      child.kill("SIGKILL");
+      await waitForChildExit(child, 5_000);
+    })();
+    return stopPromise;
   };
 
+  child.stdin.on("error", () => undefined);
   try {
     const readinessPromise = readBoundedLine(child.stdout, child, stderrSuffix);
     child.stdin.write(`${JSON.stringify({
@@ -155,16 +160,17 @@ export async function connectNativeChrome(chromium, hostConfig, options = {}) {
     if (contexts.length !== 1) {
       throw new Error(`Native Chrome must expose exactly one default context; received ${contexts.length}.`);
     }
-    let closed = false;
+    let closePromise = null;
     return {
       browser,
       context: contexts[0],
       host,
-      close: async () => {
-        if (closed) return;
-        closed = true;
-        await browser.close().catch(() => undefined);
-        await host.stop();
+      close: () => {
+        closePromise ??= (async () => {
+          await browser.close().catch(() => undefined);
+          await host.stop();
+        })();
+        return closePromise;
       },
     };
   } catch (error) {

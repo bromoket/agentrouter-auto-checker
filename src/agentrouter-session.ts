@@ -97,7 +97,7 @@ export class DefaultAgentRouterReadSessions implements AgentRouterReadSessions {
     await Promise.all([...this.runtimes.keys()].map((id) => this.drop(id)));
     const connection = this.connection;
     this.connection = null;
-    if (connection) await connection.close().catch(() => undefined);
+    if (connection) await connection.close();
   }
 
   private async browserInstance(config: AppConfig): Promise<Browser> {

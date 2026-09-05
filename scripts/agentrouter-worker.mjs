@@ -1936,7 +1936,7 @@ async function runWorker({ account, config }) {
       }
     }
   } finally {
-    await browserLifecycle?.close().catch(() => undefined);
+    if (browserLifecycle) await browserLifecycle.close();
   }
 
   result.endedAt = new Date().toISOString();

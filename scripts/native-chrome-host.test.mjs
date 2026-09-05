@@ -63,12 +63,13 @@ describe("native Chrome host protocol", () => {
   });
 
   test("accepts Google Chrome and rejects other CDP products", () => {
-    expect(validateVersionPayload({ Browser: "Chrome/151.0.7922.34", webSocketDebuggerUrl: "ws://127.0.0.1:19222/devtools/browser/id" })).toEqual({
+    expect(validateVersionPayload({ Browser: "Chrome/151.0.7922.34", webSocketDebuggerUrl: "ws://127.0.0.1:19222/devtools/browser/id" }, 19_222)).toEqual({
       product: "Chrome/151.0.7922.34",
       webSocketDebuggerUrl: "ws://127.0.0.1:19222/devtools/browser/id",
     });
-    expect(() => validateVersionPayload({ Browser: "Chromium/151.0.0.0", webSocketDebuggerUrl: "ws://127.0.0.1:19222/devtools/browser/id" })).toThrow("Google Chrome");
-    expect(() => validateVersionPayload({ Browser: "HeadlessChrome/151.0.0.0", webSocketDebuggerUrl: "ws://127.0.0.1:19222/devtools/browser/id" })).toThrow("Google Chrome");
+    expect(() => validateVersionPayload({ Browser: "Chromium/151.0.0.0", webSocketDebuggerUrl: "ws://127.0.0.1:19222/devtools/browser/id" }, 19_222)).toThrow("Google Chrome");
+    expect(() => validateVersionPayload({ Browser: "HeadlessChrome/151.0.0.0", webSocketDebuggerUrl: "ws://127.0.0.1:19222/devtools/browser/id" }, 19_222)).toThrow("Google Chrome");
+    expect(() => validateVersionPayload({ Browser: "Chrome/151.0.0.0", webSocketDebuggerUrl: "ws://127.0.0.1:19223/devtools/browser/id" }, 19_222)).toThrow("loopback");
   });
 
   test("rejects an occupied loopback endpoint", async () => {

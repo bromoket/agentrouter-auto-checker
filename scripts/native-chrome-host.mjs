@@ -89,7 +89,7 @@ export function validateExecutableProduct(output) {
   return product;
 }
 
-export function validateVersionPayload(payload) {
+export function validateVersionPayload(payload, expectedPort) {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
     throw new Error("Native Chrome CDP version response must be an object.");
   }
@@ -99,8 +99,18 @@ export function validateVersionPayload(payload) {
   if (!/^Chrome\/\d/.test(product)) {
     throw new Error("Native browser CDP endpoint is not Google Chrome.");
   }
-  if (!webSocketDebuggerUrl.startsWith("ws://127.0.0.1:")) {
-    throw new Error("Native Chrome CDP endpoint did not advertise a loopback debugger URL.");
+  let debuggerUrl;
+  try {
+    debuggerUrl = new URL(webSocketDebuggerUrl);
+  } catch {
+    throw new Error("Native Chrome CDP endpoint did not advertise a valid loopback debugger URL.");
+  }
+  if (
+    debuggerUrl.protocol !== "ws:" ||
+    debuggerUrl.hostname !== "127.0.0.1" ||
+    debuggerUrl.port !== String(expectedPort)
+  ) {
+    throw new Error("Native Chrome CDP endpoint did not advertise the requested loopback debugger URL.");
   }
   return { product, webSocketDebuggerUrl };
 }
@@ -201,7 +211,7 @@ async function waitForVersion(port, timeoutMs, stopped) {
         signal: AbortSignal.timeout(Math.min(2_000, Math.max(250, deadline - Date.now()))),
       });
       if (response.ok) {
-        const version = validateVersionPayload(await response.json());
+        const version = validateVersionPayload(await response.json(), port);
         return { endpointURL, ...version };
       }
       lastError = new Error(`CDP version endpoint returned HTTP ${response.status}.`);
@@ -226,22 +236,52 @@ function waitForExit(child, timeoutMs) {
   ]);
 }
 
-function signalOwnedProcess(child, signal) {
-  if (!child.pid || child.exitCode !== null || child.signalCode !== null) return;
+function processGroupExists(pid) {
   try {
-    if (process.platform === "win32") child.kill(signal);
-    else process.kill(-child.pid, signal);
+    process.kill(-pid, 0);
+    return true;
+  } catch (error) {
+    if (error?.code === "ESRCH") return false;
+    if (error?.code === "EPERM") return true;
+    throw error;
+  }
+}
+
+async function waitForProcessGroupExit(pid, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!processGroupExists(pid)) return true;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  return !processGroupExists(pid);
+}
+
+function signalOwnedProcess(child, signal) {
+  if (!child.pid) return;
+  try {
+    if (process.platform === "win32") {
+      if (child.exitCode === null && child.signalCode === null) child.kill(signal);
+    } else {
+      process.kill(-child.pid, signal);
+    }
   } catch (error) {
     if (!error || error.code !== "ESRCH") throw error;
   }
 }
 
 async function terminateOwnedProcess(child) {
-  if (!child) return;
+  if (!child?.pid) return;
   signalOwnedProcess(child, "SIGTERM");
-  if (await waitForExit(child, SHUTDOWN_GRACE_MS)) return;
+  if (process.platform === "win32") {
+    if (await waitForExit(child, SHUTDOWN_GRACE_MS)) return;
+  } else if (await waitForProcessGroupExit(child.pid, SHUTDOWN_GRACE_MS)) {
+    return;
+  }
   signalOwnedProcess(child, "SIGKILL");
-  await waitForExit(child, SHUTDOWN_GRACE_MS);
+  const exited = process.platform === "win32"
+    ? await waitForExit(child, SHUTDOWN_GRACE_MS)
+    : await waitForProcessGroupExit(child.pid, SHUTDOWN_GRACE_MS);
+  if (!exited) throw new Error("Owned native Chrome process group did not exit after SIGKILL.");
 }
 
 export async function runNativeChromeHost({ input = process.stdin, output = process.stdout } = {}) {
