@@ -1,13 +1,12 @@
-import { readFile, stat } from "node:fs/promises";
-import { join } from "node:path";
-import type { Browser, BrowserContext, Page } from "playwright";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { once } from "node:events";
+import { join, resolve } from "node:path";
+import { createInterface, type Interface } from "node:readline";
+import { fileURLToPath } from "node:url";
+import { randomUUID } from "node:crypto";
 import type { GitHubAccount } from "./accounts";
+import { buildBrowserWorkerEnv } from "./child-environment";
 import type { AppConfig } from "./config";
-import {
-  connectNativeChrome,
-  type NativeChromeConnection,
-  type NativeChromeHostConfig,
-} from "../scripts/native-chrome-client.mjs";
 
 export const AGENTROUTER_SESSION_DEAD_MARKER =
   "AgentRouter read session is no longer authenticated.";
@@ -34,231 +33,228 @@ export interface AgentRouterReadSessions {
   close(): Promise<void>;
 }
 
-interface AccountRuntime {
-  stateMtimeMs: number;
-  context: BrowserContext | null;
-  page: Page | null;
-  pageLoaded: boolean;
-}
 
-interface SelfObservation {
-  status: number;
-  ct: string;
-  ok: boolean;
-  body: string | null;
-  originOk: boolean;
-  path: string;
-}
 
 function storageStatePath(config: AppConfig, account: GitHubAccount): string {
   return join(config.accountStateDir, `${account.id}.monitor.json`);
 }
 
-async function readStoredUserId(statePath: string, baseUrl: string): Promise<string> {
-  const state = JSON.parse(await readFile(statePath, "utf8")) as {
-    origins?: Array<{
-      origin?: string;
-      localStorage?: Array<{ name?: string; value?: string }>;
-    }>;
-  };
-  const rawUser = state.origins?.find((origin) => origin.origin === baseUrl)?.localStorage?.find(
-    (item) => item.name === "user",
-  )?.value;
-  if (typeof rawUser === "string") {
-    try {
-      const user = JSON.parse(rawUser) as { id?: unknown };
-      const parsedId = Number(user.id);
-      if (Number.isSafeInteger(parsedId) && parsedId > 0) return String(parsedId);
-    } catch {
-      // Fall through to the dead-session error below.
-    }
-  }
-  throw new AgentRouterSessionDeadError(
-    "Saved AgentRouter monitor session does not include a valid user id.",
-  );
+
+
+interface ReadSessionTransport {
+  poll(account: GitHubAccount, config: AppConfig): Promise<unknown>;
+  drop(accountId: string): Promise<void>;
+  close(): Promise<void>;
 }
 
-type PollerConnection = Pick<NativeChromeConnection, "browser" | "close">;
+interface WorkerResponse {
+  version: 1;
+  id: string;
+  ok: boolean;
+  payload?: unknown;
+  error?: {
+    code?: string;
+    message?: string;
+  };
+}
 
-export class DefaultAgentRouterReadSessions implements AgentRouterReadSessions {
-  private connection: PollerConnection | null = null;
-  private browserStart: Promise<Browser> | null = null;
-  private readonly runtimes = new Map<string, AccountRuntime>();
-  private readonly connect: (config: NativeChromeHostConfig) => Promise<PollerConnection>;
+const READ_SESSION_WORKER_PATH = fileURLToPath(
+  new URL("../scripts/agentrouter-read-session-worker.mjs", import.meta.url),
+);
+const MAX_RESPONSE_BYTES = 1_048_576;
 
-  constructor(connect?: (config: NativeChromeHostConfig) => Promise<PollerConnection>) {
-    this.connect = connect ?? (async (config) => {
-      const { chromium } = await import("playwright");
-      return connectNativeChrome(chromium, config);
+class NodeReadSessionTransport implements ReadSessionTransport {
+  private process: ChildProcessWithoutNullStreams | null = null;
+  private lines: Interface | null = null;
+  private iterator: AsyncIterableIterator<string> | null = null;
+  private stderr = "";
+  private queue: Promise<void> = Promise.resolve();
+  private closed = false;
+  private closePromise: Promise<void> | null = null;
+
+  private ensureProcess(): ChildProcessWithoutNullStreams {
+    if (this.closed) throw new Error("AgentRouter read-session transport is closed.");
+    if (this.process && this.process.exitCode === null && !this.process.killed) return this.process;
+    this.stderr = "";
+    const nodeBinary = process.env.NODE_BINARY?.trim() || "node";
+    const child = spawn(nodeBinary, [READ_SESSION_WORKER_PATH], {
+      cwd: process.cwd(),
+      env: buildBrowserWorkerEnv(),
+      shell: false,
+      windowsHide: true,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    child.stdin.on("error", () => undefined);
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk: string) => {
+      this.stderr = `${this.stderr}${chunk}`.slice(-4_096);
+    });
+    child.on("error", (error) => {
+      this.stderr = `${this.stderr}\n${error.message}`.slice(-4_096);
+    });
+    this.process = child;
+    this.lines = createInterface({ input: child.stdout, crlfDelay: Infinity });
+    this.iterator = this.lines[Symbol.asyncIterator]();
+    return child;
+  }
+
+  private enqueue<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.queue.then(operation);
+    this.queue = result.then(() => undefined, () => undefined);
+    return result;
+  }
+
+  private async nextResponse(timeoutMs: number): Promise<string> {
+    const iterator = this.iterator;
+    if (!iterator) throw new Error("AgentRouter read-session worker is unavailable.");
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      const result = await Promise.race([
+        iterator.next(),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(
+            () => reject(new Error("AgentRouter read-session worker response timed out.")),
+            timeoutMs,
+          );
+        }),
+      ]);
+      if (result.done) {
+        const detail = this.stderr.trim().replace(/\s+/g, " ").slice(-1_000);
+        throw new Error(
+          `AgentRouter read-session worker exited before responding${detail ? `: ${detail}` : "."}`,
+        );
+      }
+      if (Buffer.byteLength(result.value, "utf8") > MAX_RESPONSE_BYTES) {
+        throw new Error(`AgentRouter read-session worker response exceeds ${MAX_RESPONSE_BYTES} bytes.`);
+      }
+      return result.value;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  private async request(
+    body: Record<string, unknown>,
+    timeoutMs: number,
+  ): Promise<unknown> {
+    return this.enqueue(async () => {
+      if (this.closed) throw new Error("AgentRouter read-session transport is closed.");
+      const child = this.ensureProcess();
+      const id = randomUUID();
+      const record = JSON.stringify({ version: 1, id, ...body });
+      if (Buffer.byteLength(record, "utf8") > MAX_RESPONSE_BYTES) {
+        throw new Error(`AgentRouter read-session worker request exceeds ${MAX_RESPONSE_BYTES} bytes.`);
+      }
+      try {
+        if (!child.stdin.write(`${record}\n`)) await once(child.stdin, "drain");
+        const line = await this.nextResponse(timeoutMs);
+        const parsed: unknown = JSON.parse(line);
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+          throw new Error("AgentRouter read-session worker emitted a non-object response.");
+        }
+        const response = parsed as Partial<WorkerResponse>;
+        if (response.version !== 1 || response.id !== id || typeof response.ok !== "boolean") {
+          throw new Error("AgentRouter read-session worker emitted a mismatched response.");
+        }
+        if (response.ok) return response.payload;
+        const message =
+          typeof response.error?.message === "string"
+            ? response.error.message
+            : "AgentRouter browser read failed.";
+        if (response.error?.code === "agentrouter_session_dead") {
+          throw new AgentRouterSessionDeadError(message);
+        }
+        throw new Error(message);
+      } catch (error) {
+        await this.stopProcess();
+        throw error;
+      }
     });
   }
 
-  private async resetBrowser(): Promise<void> {
-    await Promise.all([...this.runtimes.keys()].map((id) => this.drop(id)));
-    const connection = this.connection;
-    this.connection = null;
-    if (connection) await connection.close();
-  }
-
-  private async browserInstance(config: AppConfig): Promise<Browser> {
-    if (this.connection?.browser.isConnected()) return this.connection.browser;
-    if (this.browserStart === null) {
-      this.browserStart = (async () => {
-        await this.resetBrowser();
-        const connection = await this.connect({
-          executablePath: config.browserExecutable,
-          userDataDir: config.browserPollerProfileDir,
-          port: config.browserPollerCdpPort,
-          startupTimeoutMs: config.browserStartTimeoutMs,
-        });
-        this.connection = connection;
-        return connection.browser;
-      })().finally(() => {
-        this.browserStart = null;
-      });
-    }
-    return this.browserStart;
-  }
-
-  private async runtime(account: GitHubAccount, config: AppConfig): Promise<AccountRuntime> {
-    const statePath = storageStatePath(config, account);
-    let stateMtimeMs = 0;
-    try {
-      stateMtimeMs = (await stat(statePath)).mtimeMs;
-    } catch {
-      throw new AgentRouterSessionDeadError(
-        "No AgentRouter monitor session has been captured for this account yet.",
-      );
-    }
-    const existing = this.runtimes.get(account.id);
-    if (
-      existing &&
-      existing.stateMtimeMs === stateMtimeMs &&
-      existing.context &&
-      this.connection?.browser.isConnected()
-    ) {
-      return existing;
-    }
-    await this.drop(account.id);
-    const browser = await this.browserInstance(config);
-    const context = await browser.newContext({ storageState: statePath });
-    const runtime: AccountRuntime = {
-      stateMtimeMs,
-      context,
-      page: null,
-      pageLoaded: false,
-    };
-    this.runtimes.set(account.id, runtime);
-    return runtime;
-  }
-
-  private async evaluateSelf(
-    page: Page,
-    config: AppConfig,
-    userId: string,
-  ): Promise<SelfObservation | null> {
-    const expectedOrigin = new URL(config.baseUrl).origin;
-    try {
-      return await page.evaluate(async ({ expectedOrigin, numericUserId }) => {
-        if (location.origin !== expectedOrigin) {
-          return { status: 0, ct: "", ok: false, body: null, originOk: false, path: location.href };
-        }
-        const response = await fetch("/api/user/self", {
-          credentials: "include",
-          headers: {
-            Accept: "application/json",
-            "Cache-Control": "no-store",
-            "New-API-User": String(numericUserId),
-          },
-        });
-        const ct = (response.headers.get("content-type") ?? "").toLowerCase();
-        const body = ct.includes("application/json") ? await response.text() : null;
-        return {
-          status: response.status,
-          ct,
-          ok: response.ok,
-          body,
-          originOk: true,
-          path: location.href,
-        };
-      }, { expectedOrigin, numericUserId: userId });
-    } catch {
-      return null;
-    }
-  }
-
-  private static parsePayload(observation: SelfObservation): unknown | null {
-    if (
-      !observation.originOk ||
-      !observation.ok ||
-      !observation.ct.includes("application/json") ||
-      observation.body === null
-    ) {
-      return null;
-    }
-    try {
-      const payload: unknown = JSON.parse(observation.body);
-      return payload && typeof payload === "object" ? payload : null;
-    } catch {
-      return null;
-    }
+  private assertOpen(): void {
+    if (this.closed) throw new Error("AgentRouter read-session transport is closed.");
   }
 
   async poll(account: GitHubAccount, config: AppConfig): Promise<unknown> {
-    const runtime = await this.runtime(account, config);
-    const context = runtime.context as BrowserContext;
-    const userId = await readStoredUserId(storageStatePath(config, account), config.baseUrl);
-    let page = runtime.page;
-    if (page === null || page.isClosed()) {
-      page = context.pages().find((candidate) => !candidate.isClosed()) ?? (await context.newPage());
-      runtime.page = page;
-    }
-    const navigationTimeout = Math.min(config.requestTimeoutMs, 30_000);
-    if (!runtime.pageLoaded) {
-      await page.goto(new URL("/console/", config.baseUrl).toString(), {
-        waitUntil: "domcontentloaded",
-        timeout: navigationTimeout,
-      });
-      runtime.pageLoaded = true;
-    }
-
-    let observation = await this.evaluateSelf(page, config, userId);
-    let payload =
-      observation === null ? null : DefaultAgentRouterReadSessions.parsePayload(observation);
-    if (payload === null) {
-      // A WAF challenge or expired session can reject the first read. Reload
-      // the console once so the challenge resolves inside the real browser.
-      try {
-        await page.goto(new URL("/console/", config.baseUrl).toString(), {
-          waitUntil: "domcontentloaded",
-          timeout: navigationTimeout,
-        });
-      } catch {
-        // The reload may leave the page closed; evaluate below reports failure.
-      }
-      observation = await this.evaluateSelf(page, config, userId);
-      payload =
-        observation === null ? null : DefaultAgentRouterReadSessions.parsePayload(observation);
-    }
-    if (payload === null) {
-      await this.drop(account.id);
-      throw new AgentRouterSessionDeadError(
-        "AgentRouter read session is no longer authenticated after a console reload.",
-      );
-    }
-    return payload;
+    this.assertOpen();
+    return this.request({
+      type: "poll",
+      browser: {
+        executablePath: config.browserExecutable,
+        userDataDir: config.browserPollerProfileDir,
+        port: config.browserPollerCdpPort,
+        startupTimeoutMs: config.browserStartTimeoutMs,
+      },
+      account: {
+        id: account.id,
+        statePath: resolve(storageStatePath(config, account)),
+        baseUrl: new URL(config.baseUrl).origin,
+        requestTimeoutMs: config.requestTimeoutMs,
+      },
+    }, Math.max(config.browserStartTimeoutMs + config.requestTimeoutMs * 3, 60_000));
   }
 
   async drop(accountId: string): Promise<void> {
-    const runtime = this.runtimes.get(accountId);
-    if (runtime) {
-      this.runtimes.delete(accountId);
-      await runtime.context?.close().catch(() => undefined);
+    this.assertOpen();
+    if (!this.process || this.process.exitCode !== null) return;
+    await this.request({ type: "drop", accountId }, 30_000);
+  }
+
+  private async waitForProcessClose(
+    child: ChildProcessWithoutNullStreams,
+    timeoutMs: number,
+  ): Promise<boolean> {
+    if (child.exitCode !== null || child.signalCode !== null) return true;
+    return Promise.race([
+      once(child, "close").then(() => true),
+      new Promise<boolean>((resolveTimeout) => setTimeout(() => resolveTimeout(false), timeoutMs)),
+    ]);
+  }
+
+  private async stopProcess(): Promise<void> {
+    const child = this.process;
+    if (!child) return;
+    child.stdin.end();
+    let exited = await this.waitForProcessClose(child, 15_000);
+    if (!exited) {
+      child.kill("SIGTERM");
+      exited = await this.waitForProcessClose(child, 5_000);
+    }
+    if (!exited) {
+      child.kill("SIGKILL");
+      exited = await this.waitForProcessClose(child, 5_000);
+    }
+    if (!exited) {
+      throw new Error("AgentRouter read-session worker did not exit after SIGKILL.");
+    }
+    if (this.process === child) {
+      this.process = null;
+      this.iterator = null;
+      this.lines = null;
     }
   }
 
+  close(): Promise<void> {
+    if (this.closePromise) return this.closePromise;
+    this.closed = true;
+    this.closePromise = this.enqueue(() => this.stopProcess());
+    return this.closePromise;
+  }
+}
+
+export class DefaultAgentRouterReadSessions implements AgentRouterReadSessions {
+  constructor(private readonly transport: ReadSessionTransport = new NodeReadSessionTransport()) {}
+
+  async poll(account: GitHubAccount, config: AppConfig): Promise<unknown> {
+    return this.transport.poll(account, config);
+  }
+
+  async drop(accountId: string): Promise<void> {
+    await this.transport.drop(accountId);
+  }
+
   async close(): Promise<void> {
-    await this.browserStart?.catch(() => undefined);
-    await this.resetBrowser();
+    await this.transport.close();
   }
 }

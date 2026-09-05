@@ -1684,7 +1684,10 @@ async function runWorker({ account, config }) {
         const cleared = await context.clearCookies({ domain: new URL(agentRouterOrigin).hostname }).catch(() => 0);
         log(`[${account.label}] agentrouter cookies cleared (${cleared ?? "n/a"})`);
         for (const call of result.apiCalls) {
-          if (call.source === "api-logout" && !call.ok && !call.recovered) call.recovered = true;
+          const staleLogoutAttempt =
+            call.source === "api-logout" ||
+            call.path === "/console → profile menu → Quit";
+          if (staleLogoutAttempt && !call.ok && !call.recovered) call.recovered = true;
         }
         await activePage.goto(`${config.baseUrl}/login`, {
           waitUntil: "domcontentloaded",
