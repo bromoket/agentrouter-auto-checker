@@ -52,6 +52,7 @@ export interface RunSnapshot {
   apiCalls: ApiCallSnapshot[];
   loggedOut: boolean;
   sessionReused: boolean;
+  sessionKept?: boolean;
   errorMessage?: string;
   screenshotPath?: string;
   capturedApiToken?: string;
@@ -534,8 +535,8 @@ export class Store {
     if (snapshot.status === "ok") {
       const balance = Number(snapshot.metrics.balance);
       const consumed = Number(snapshot.metrics.consumed);
-      if (snapshot.loggedOut !== true) {
-        throw new Error("A successful run must confirm AgentRouter logout.");
+      if (snapshot.loggedOut !== true && snapshot.sessionKept !== true) {
+        throw new Error("A successful run must confirm AgentRouter logout or keep the persistent session.");
       }
       if (!Number.isFinite(balance) || !Number.isFinite(consumed) || consumed < 0) {
         throw new Error("A successful run must include a finite balance and finite, non-negative consumption metrics.");

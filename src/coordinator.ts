@@ -65,6 +65,7 @@ function failedSnapshot(account: GitHubAccount, startedAt: string, error: unknow
     apiCalls: [],
     loggedOut: false,
     sessionReused: false,
+    sessionKept: false,
     errorMessage: error instanceof Error ? `${error.name}: ${error.message}` : String(error),
   };
 }

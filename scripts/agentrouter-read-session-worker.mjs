@@ -146,56 +146,65 @@ class ReadSessionRuntime {
     this.accounts = new Map();
   }
 
+
   async drop(accountId) {
     const runtime = this.accounts.get(accountId);
     if (!runtime) return;
     this.accounts.delete(accountId);
-    await runtime.context.close().catch(() => undefined);
+    if (runtime.connection) {
+      await runtime.connection.close().catch(() => undefined);
+    } else {
+      await runtime.context.close().catch(() => undefined);
+    }
   }
 
   async closeBrowser() {
     await Promise.all([...this.accounts.keys()].map((id) => this.drop(id)));
-    const connection = this.connection;
     this.connection = null;
     this.browserKey = null;
-    if (connection) await connection.close();
   }
 
-  async browser(config) {
+  async browserForAccount(accountId, config) {
     const key = JSON.stringify(config);
-    if (this.connection?.browser.isConnected() && this.browserKey === key) return this.connection.browser;
-    await this.closeBrowser();
-    this.connection = await connectNativeChrome(chromium, config);
-    this.browserKey = key;
-    return this.connection.browser;
+    const runtime = this.accounts.get(accountId);
+    if (runtime?.connection?.browser.isConnected() && runtime.browserKey === key) {
+      return runtime.connection.browser;
+    }
+    const connection = await connectNativeChrome(chromium, config);
+    return connection;
   }
 
   async accountRuntime(request) {
-    let stateMtimeMs;
-    try {
-      stateMtimeMs = (await stat(request.account.statePath)).mtimeMs;
-    } catch {
-      throw new SessionDeadError("No AgentRouter monitor session has been captured for this account yet.");
-    }
+    // Option A: reuse the account's own verified Chrome profile. Launch (or attach
+    // to) a browser on the account profile dir and use its default context, which
+    // carries the WAF-verified AgentRouter session persisted in the profile — so
+    // reads are not re-challenged by the access-verification WAF. A fresh
+    // newContext({ storageState }) on a different profile would be re-challenged.
     const runtimeKey = JSON.stringify({
       browser: request.browser,
-      statePath: request.account.statePath,
       baseUrl: request.account.baseUrl,
     });
     const existing = this.accounts.get(request.account.id);
-    if (
-      existing &&
-      existing.runtimeKey === runtimeKey &&
-      existing.stateMtimeMs === stateMtimeMs &&
-      existing.context &&
-      this.connection?.browser.isConnected()
-    ) {
+    if (existing && existing.runtimeKey === runtimeKey && existing.context && existing.connection?.browser.isConnected()) {
       return existing;
     }
-    await this.drop(request.account.id);
-    const browser = await this.browser(request.browser);
-    const context = await browser.newContext({ storageState: request.account.statePath });
-    const runtime = { runtimeKey, stateMtimeMs, context, page: null, pageLoaded: false };
+    if (existing?.connection) {
+      await existing.connection.close().catch(() => undefined);
+    }
+    const connection = await this.browserForAccount(request.account.id, request.browser);
+    const browser = connection.browser;
+    const defaults = browser.contexts();
+    const context = defaults.length > 0 ? defaults[0] : await browser.newContext();
+    await context.newPage().then((page) => page.close()).catch(() => undefined);
+    const runtime = {
+      runtimeKey,
+      stateMtimeMs: Date.now(),
+      context,
+      page: null,
+      pageLoaded: false,
+      connection,
+      browserKey: JSON.stringify(request.browser),
+    };
     this.accounts.set(request.account.id, runtime);
     return runtime;
   }
