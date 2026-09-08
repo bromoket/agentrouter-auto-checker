@@ -528,6 +528,41 @@ describe("ObservatoryStore V1 Comprehensive Suite", () => {
     expect(finalDelivery?.providerMessageId).toBe("tg_msg_98765");
   });
 
+  test("reclaims a failed delivery on a strictly later pass", () => {
+    // A prior pass failed a delivery. A later pass with a strictly later
+    // failedBefore must reclaim it to retry. (Same-pass is already covered by
+    // the lease-CAS test above using a passStart cutoff.)
+    const store = new ObservatoryStore(":memory:");
+    const ev = store.recordEvent({
+      eventType: "quota_warning",
+      severity: "warning",
+      fingerprint: "fp-lease-later",
+      occurredAt: "2026-09-01T17:00:00.000Z",
+    });
+    const dr = store.recordDeliveryAttempt({
+      eventId: ev.event.eventId,
+      channel: "telegram",
+      status: "pending",
+      fingerprint: "fp-del-lease-later",
+    });
+    const deliveryId = dr.delivery.deliveryId;
+
+    const pass1 = new Date().toISOString();
+    const first = store.claimDeliveryLease("telegram", 30000, 3, pass1);
+    expect(first).not.toBeNull();
+    store.markDeliveryFailed(deliveryId, first!.leaseToken!, {
+      errorCategory: "network",
+      retryable: true,
+    });
+
+    // A strictly later pass re-claims.
+    const pass2 = new Date(Date.now() + 1_000).toISOString();
+    const retry = store.claimDeliveryLease("telegram", 30000, 3, pass2);
+    expect(retry).not.toBeNull();
+    expect(retry?.deliveryId).toBe(deliveryId);
+    expect(retry?.attemptCount).toBe(2);
+  });
+
   test("nonce atomic claim with strict TTL and server time comparison", () => {
     const store = new ObservatoryStore(":memory:");
     const claimedAt = new Date(Date.now() + 2 * 60_000).toISOString();

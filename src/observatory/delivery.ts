@@ -83,6 +83,8 @@ export function categorizeDeliveryError(error: unknown): DeliveryErrorCategory {
 export class ObservatoryDeliveryManager {
   private readonly leaseDurationMs: number;
   private readonly maxRetries: number;
+  /** Monotonically increasing pass boundary so consecutive passes never collide. */
+  private lastPassBoundaryMs = 0;
 
   constructor(
     private readonly store: ObservatoryStore,
@@ -99,7 +101,15 @@ export class ObservatoryDeliveryManager {
     let sent = 0;
     let failed = 0;
 
-    const failedBefore = new Date().toISOString();
+    // A pass boundary that is strictly later than any prior pass, so a delivery
+    // failed in a previous processOutboxOnce call is always reclaimable on the
+    // next call even when both land within the same wall-clock millisecond. The
+    // same-pass guard (a row failed during THIS call) still holds because the
+    // boundary is fixed for the whole call.
+    const nowMs = Date.now();
+    const boundaryMs = this.lastPassBoundaryMs >= nowMs ? this.lastPassBoundaryMs + 1 : nowMs;
+    this.lastPassBoundaryMs = boundaryMs;
+    const failedBefore = new Date(boundaryMs).toISOString();
     for (let i = 0; i < maxItems; i++) {
       const lease = this.store.claimDeliveryLease("telegram", this.leaseDurationMs, this.maxRetries, failedBefore);
       if (!lease) break;
