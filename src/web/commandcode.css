@@ -1,20 +1,33 @@
-/* Command Code monitoring page styles */
+/* Command Code monitoring page styles — refined to match the dashboard's premium look. */
 .cc-status-strip { display: flex; gap: 8px; align-items: center; margin-bottom: 16px; flex-wrap: wrap; }
-.cc-status-strip .chip { background: rgba(255,255,255,0.06); padding: 6px 10px; border-radius: 999px; font-size: 13px; }
-.cc-account { margin-bottom: 16px; }
+.cc-status-strip .chip { background: rgba(139,92,246,0.12); border: 1px solid rgba(168,85,247,0.22); color: #c4b5fd; padding: 6px 12px; border-radius: 999px; font-size: 12px; font-weight: 600; letter-spacing: .02em; }
+
+.cc-account { position: relative; margin-bottom: 16px; overflow: hidden; }
+/* subtle accent glow on the account card */
+.cc-account::before { content: ""; position: absolute; inset: 0; pointer-events: none; background: radial-gradient(60% 120% at 0% 0%, rgba(139,92,246,0.08), transparent); }
+
 .cc-account-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
-.cc-account-head h3 { margin: 0 0 2px; font-size: 18px; }
+.cc-account-head h3 { margin: 0 0 2px; font-size: 19px; font-weight: 800; letter-spacing: -.02em; }
+.cc-account-head .muted { font-size: 12px; letter-spacing: .04em; text-transform: uppercase; }
 .cc-account-actions { display: flex; gap: 8px; }
+
 .cc-error { color: #ff8a80; margin: 8px 0 0; font-size: 13px; }
-.cc-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 12px; margin: 14px 0; }
-.cc-stat { display: flex; flex-direction: column; gap: 4px; }
-.cc-stat strong { font-size: 20px; }
-.cc-window { margin: 8px 0; }
-.cc-window-head, .cc-window-foot { display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 4px; }
-.cc-bar { height: 10px; border-radius: 999px; background: rgba(255,255,255,0.08); overflow: hidden; }
-.cc-bar-fill { display: block; height: 100%; border-radius: 999px; }
-.cc-bar-fill-ok { background: linear-gradient(90deg, #38bdf8, #34d399); }
-.cc-bar-fill-warn { background: linear-gradient(90deg, #fbbf24, #f59e0b); }
-.cc-bar-fill-danger { background: linear-gradient(90deg, #f87171, #ef4444); }
-#cc-oauth-panel { max-width: 420px; }
+
+.cc-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 12px; margin: 16px 0; }
+.cc-stat { display: flex; flex-direction: column; gap: 4px; padding: 14px; border-radius: 14px; background: rgba(255,255,255,0.035); border: 1px solid rgba(255,255,255,0.05); }
+.cc-stat strong { font-size: 22px; font-weight: 800; letter-spacing: -.02em; }
+.cc-stat .muted { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: rgba(196,181,253,0.7); }
+
+.cc-window { margin: 14px 0 8px; }
+.cc-window-head, .cc-window-foot { display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 5px; }
+.cc-window-head span:first-child { font-weight: 700; }
+.cc-window-foot .muted { font-size: 12px; color: rgba(196,181,253,0.75); }
+
+.cc-bar { height: 12px; border-radius: 999px; background: rgba(255,255,255,0.06); overflow: hidden; position: relative; }
+.cc-bar-fill { display: block; height: 100%; border-radius: 999px; transition: width .6s cubic-bezier(.2,.7,.2,1); }
+.cc-bar-fill-ok { background: linear-gradient(90deg, #34d399, #38bdf8); box-shadow: 0 0 14px rgba(52,211,153,0.35); }
+.cc-bar-fill-warn { background: linear-gradient(90deg, #f59e0b, #fbbf24); box-shadow: 0 0 14px rgba(245,158,11,0.35); }
+.cc-bar-fill-danger { background: linear-gradient(90deg, #ef4444, #f87171); box-shadow: 0 0 14px rgba(239,68,68,0.4); }
+
+#cc-oauth-panel { max-width: 440px; }
 #cc-oauth-panel .field { margin: 10px 0; }
