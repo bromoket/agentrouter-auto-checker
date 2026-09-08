@@ -2,14 +2,15 @@
 // GOAT account and delivers it to Telegram, to demonstrate the rich message format
 // (provider, window, used/cap, remaining %, reset countdown).
 import { loadConfig } from "../src/config";
-import { createDashboardAuth } from "../src/dashboard-auth";
+import { Store } from "../src/storage";
 import { ObservatoryStore } from "../src/observatory/store";
 import { ObservatoryDeliveryManager } from "../src/observatory/delivery";
 import { createDeterministicFingerprint } from "../src/observatory/events";
-import type { TelegramNotifier } from "../src/telegram";
+import { TelegramNotifier } from "../src/telegram";
 
 const config = loadConfig();
 const store = new ObservatoryStore(config.observatory.dbPath);
+const legacyStore = new Store(config.dbPath);
 
 // Use the Command Code GOAT identity + its real weekly window reset.
 const GOAT_ID = "6fbb6481-5f82-428b-bfd8-99b676718f4d";
@@ -65,9 +66,8 @@ const delivery = store.recordDeliveryAttempt({
   fingerprint: createDeterministicFingerprint("delivery", event.eventId, "telegram", "demo"),
 });
 
-// Inject the real TelegramNotifier like the service does.
-import { TelegramNotifier } from "../src/telegram";
-const telegram = await TelegramNotifier.create(config, store);
+// Build the real TelegramNotifier with the legacy store (as the service does).
+const telegram = await TelegramNotifier.create(config, legacyStore);
 if (!telegram) {
   console.log("TELEGRAM_NOT_CONFIGURED");
   process.exit(0);
@@ -76,3 +76,4 @@ const manager = new ObservatoryDeliveryManager(store, telegram, config);
 const result = await manager.processOutboxOnce(1);
 console.log("SYNTHETIC_DELIVERY processed=" + result.processed + " sent=" + result.sent + " failed=" + result.failed);
 store.close();
+legacyStore.close();
