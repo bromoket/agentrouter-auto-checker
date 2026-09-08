@@ -62,7 +62,7 @@ export function formatObservatoryEventMessage(
     lines.push(`<b>Used:</b> ${escapeHtml(String(used))} / ${escapeHtml(String(detail.totalUnits))}`);
     lines.push(`<b>Remaining:</b> ${escapeHtml(String(remaining))} (${pct}%)`);
     if (detail.resetAt) {
-      lines.push(`<b>Resets:</b> ${escapeHtml(observedAt(detail.resetAt))}`);
+      lines.push(`<b>Resets:</b> ${escapeHtml(relativeReset(detail.resetAt))} (${escapeHtml(observedAt(detail.resetAt))})`);
     }
   }
 
@@ -84,6 +84,20 @@ export function formatObservatoryEventMessage(
 
 function safeLabel(value: string): string {
   return value.replace(/[_\-]+/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+/** Human relative countdown to a reset time, e.g. "in 6d 4h" / "in 2h 15m". */
+function relativeReset(iso: string): string {
+  const target = new Date(iso).getTime();
+  if (!Number.isFinite(target)) return "unknown";
+  const delta = target - Date.now();
+  if (delta <= 0) return "now (resetting)";
+  const d = Math.floor(delta / 86_400_000);
+  const h = Math.floor((delta % 86_400_000) / 3_600_000);
+  const m = Math.floor((delta % 3_600_000) / 60_000);
+  if (d > 0) return `in ${d}d ${h}h`;
+  if (h > 0) return `in ${h}h ${m}m`;
+  return `in ${m}m`;
 }
 
 export function categorizeDeliveryError(error: unknown): DeliveryErrorCategory {

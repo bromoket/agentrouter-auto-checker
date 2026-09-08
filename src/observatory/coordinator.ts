@@ -15,7 +15,6 @@ import {
   type QuotaTrackerState as EventQuotaTrackerState,
 } from "./events";
 import {
-  collectOmpUsage,
   sanitizeOmpUsageError,
   type OmpUsageExecutor,
 } from "./omp-usage";
@@ -94,20 +93,19 @@ export class ObservatoryCoordinator {
     ompExecutor?: OmpUsageExecutor,
   ) {
     this.deliveryManagerInternal = new ObservatoryDeliveryManager(store, telegram, config);
-    this.ompExecutor = ompExecutor ?? (() => {
-      const hmacKey = config.observatory.hmacKey;
-      if (!hmacKey) throw new Error("OMP_USAGE_KEY_ERROR");
-      return collectOmpUsage({
-        hmacKey,
-        hostId: config.observatory.sourceHostId,
-        sourceVersion: "18.0.11",
-        executable: config.observatory.ompExecutable,
-        brokerUrl: config.ompQuota.brokerUrl ?? undefined,
-        brokerToken: process.env.OMP_AUTH_BROKER_TOKEN?.trim() || undefined,
-        timeoutMs: config.observatory.ompTimeoutMs,
-        maxAccountsPerProvider: config.observatory.maxAccountsPerProvider,
-        perAccountTimeoutMs: config.observatory.perAccountTimeoutMs,
-      });
+    // OMP CLI usage collection is retired: provider quota now comes from the
+    // dedicated OAuth collectors (Antigravity, Command Code, ChatGPT) which feed
+    // ingestBatch directly. The default executor returns an empty normalized result
+    // so the observatory heartbeat stays healthy without the OMP broker dependency.
+    this.ompExecutor = ompExecutor ?? (async () => {
+      const observedAt = new Date().toISOString();
+      return {
+        observedAt,
+        identities: [] as ProviderIdentityObservation[],
+        quotas: [] as QuotaObservationInput[],
+        capacity: null,
+        stats: { totalReports: 0, totalLimits: 0, totalIdentities: 0, totalDisabled: 0, totalWithoutUsage: 0 },
+      };
     });
   }
 
