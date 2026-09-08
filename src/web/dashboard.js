@@ -1727,6 +1727,8 @@ function renderActiveView() {
   if (state.activeView === "overview") { renderObservatoryOverview(); renderOverview(); }
   else if (state.activeView === "quotas") renderQuotas();
   else if (state.activeView === "antigravity") window.renderAntigravityView?.();
+  else if (state.activeView === "commandcode") window.renderCommandCodeView?.();
+  else if (state.activeView === "chatgpt") window.renderChatgptView?.();
   else if (state.activeView === "credentials") renderCredentials();
   else if (state.activeView === "accounts") renderAccountsRoster();
   else if (state.activeView === "notifications") { renderPolicies(); renderEvents(); }
@@ -2018,13 +2020,14 @@ function setActiveViewNavigation(name) {
 }
 
 function showView(name, options = {}) {
-  const valid = new Set(["overview", "quotas", "antigravity", "commandcode", "credentials", "accounts", "notifications", "events", "health"]);
+  const valid = new Set(["overview", "quotas", "antigravity", "commandcode", "chatgpt", "credentials", "accounts", "notifications", "events", "health"]);
   if (!valid.has(name)) name = "overview";
   if (state.selectedId !== null) state.revealedTokens.clear();
   state.selectedId = null;
   state.activeView = name;
   if (name !== "antigravity") window.antigravityHide?.();
   if (name !== "commandcode") window.commandcodeHide?.();
+  if (name !== "chatgpt") window.chatgptHide?.();
   state.viewRequest += 1;
   destroyCharts([...OVERVIEW_CHARTS, ...ACCOUNT_CHARTS]);
   document.querySelectorAll(".view-panel").forEach((panel) => panel.classList.toggle("hidden", panel.id !== `${name}-view`));

@@ -8,10 +8,12 @@ import { AuthenticationChallengeBroker } from "./challenges";
 import type { AppConfig } from "./config";
 import { handleAntigravityApi } from "./antigravity/api";
 import { handleCommandCodeApi } from "./commandcode/api";
+import { handleChatgptApi } from "./chatgpt/api";
 import { CheckCoordinator } from "./coordinator";
 import { handleObservatoryApi } from "./observatory/api";
 import type { AntigravityApiContext } from "./antigravity/api";
 import type { CommandCodeApiContext } from "./commandcode/api";
+import type { ChatgptApiContext } from "./chatgpt/api";
 import type { ObservatoryCoordinator } from "./observatory/coordinator";
 import type { ObservatoryStore } from "./observatory/store";
 import {
@@ -154,6 +156,7 @@ export function startDashboard(
   } | null,
   antigravityContext?: AntigravityApiContext | null,
   commandcodeContext?: CommandCodeApiContext | null,
+  chatgptContext?: ChatgptApiContext | null,
 ) {
   if (config.observatory.enabled && !config.dashboardAuth.enabled) {
     throw new Error("Observatory dashboard requires enabled API key session authentication.");
@@ -280,6 +283,16 @@ export function startDashboard(
           }
           return errorResponse("Command Code API route not found.", 404);
         }
+        if (url.pathname.startsWith("/api/chatgpt/")) {
+          if (!chatgptContext) {
+            return errorResponse("ChatGPT monitoring is disabled.", 404);
+          }
+          const chatgptResponse = await handleChatgptApi(request, url, method, chatgptContext);
+          if (chatgptResponse) {
+            return chatgptResponse;
+          }
+          return errorResponse("ChatGPT API route not found.", 404);
+        }
         if (method === "GET" && url.pathname === "/antigravity.css") {
           return serveFile(join(WEB_ROOT, "antigravity.css"));
         }
@@ -291,6 +304,12 @@ export function startDashboard(
         }
         if (method === "GET" && url.pathname === "/commandcode.js") {
           return serveFile(join(WEB_ROOT, "commandcode.js"));
+        }
+        if (method === "GET" && url.pathname === "/chatgpt.css") {
+          return serveFile(join(WEB_ROOT, "chatgpt.css"));
+        }
+        if (method === "GET" && url.pathname === "/chatgpt.js") {
+          return serveFile(join(WEB_ROOT, "chatgpt.js"));
         }
         if (method === "GET" && url.pathname === "/vendor/chart.umd.js") {
           return serveFile(CHART_BUNDLE);

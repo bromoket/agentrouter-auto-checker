@@ -446,3 +446,36 @@ describe("loadConfig Command Code controls", () => {
     expect(configTen.commandcode.probeIntervalMinutes).toBe(10);
   });
 });
+
+describe("loadConfig ChatGPT controls", () => {
+  function enableObservatory() {
+    process.env.OBSERVATORY_ENABLED = "true";
+    process.env.OBSERVATORY_HMAC_KEY = "a".repeat(32);
+    process.env.OBSERVATORY_OMP_EXECUTABLE = process.platform === "win32" ? "C:\\opt\\omp.cmd" : "/opt/omp";
+    process.env.OBSERVATORY_OMP_VERSION = "18.0.11";
+    process.env.DASHBOARD_API_KEY = "k".repeat(32);
+    process.env.DASHBOARD_ALLOWED_ORIGINS = "https://bkserver.tailbbaa91.ts.net";
+    process.env.OMP_QUOTA_ENABLED = "false";
+    process.env.OMP_AUTH_BROKER_URL = "http://127.0.0.1:8765";
+    process.env.OMP_AUTH_BROKER_TOKEN = "broker-token";
+  }
+
+  test("disables ChatGPT by default", () => {
+    delete process.env.CHATGPT_ENABLED;
+    const config = loadConfig();
+    expect(config.chatgpt.enabled).toBe(false);
+    expect(config.chatgpt.encryptionKey).toBeNull();
+  });
+
+  test("requires encryption key when enabled", () => {
+    enableObservatory();
+    process.env.CHATGPT_ENABLED = "true";
+    delete process.env.CHATGPT_ENC_KEY;
+    expect(() => loadConfig()).toThrow("CHATGPT_ENC_KEY is required");
+
+    process.env.CHATGPT_ENC_KEY = "a".repeat(32);
+    const config = loadConfig();
+    expect(config.chatgpt.enabled).toBe(true);
+    expect(config.chatgpt.probeIntervalMinutes).toBe(5);
+  });
+});

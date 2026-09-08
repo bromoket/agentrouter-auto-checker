@@ -32,6 +32,7 @@ export interface AppConfig {
   observatory: ObservatoryConfig;
   antigravity: AntigravityConfig;
   commandcode: CommandCodeConfig;
+  chatgpt: ChatgptConfig;
   collector: CollectorConfig;
   dashboardAuth: DashboardAuth;
 }
@@ -76,6 +77,14 @@ export interface AntigravityConfig {
 }
 
 export interface CommandCodeConfig {
+  enabled: boolean;
+  dbPath: string;
+  encryptionKey: string | null;
+  probeIntervalMinutes: number;
+  probeTimeoutMs: number;
+}
+
+export interface ChatgptConfig {
   enabled: boolean;
   dbPath: string;
   encryptionKey: string | null;
@@ -539,6 +548,43 @@ function loadCommandCodeConfig(
   };
 }
 
+function loadChatgptConfig(
+  dataDir: string,
+  observatory: ObservatoryConfig,
+  agentRouterDbPath: string,
+): ChatgptConfig {
+  const enabled = parseBoolean("CHATGPT_ENABLED", false);
+  const rawDbPath = process.env.CHATGPT_DB_PATH?.trim();
+  const dbPath = rawDbPath || dataDir + "/chatgpt.sqlite";
+  const encryptionKey = process.env.CHATGPT_ENC_KEY?.trim() || null;
+  if (enabled) {
+    if (!observatory.enabled) {
+      throw new Error("ChatGPT quota monitoring requires Observatory to be enabled.");
+    }
+    if (!encryptionKey) {
+      throw new Error("CHATGPT_ENC_KEY is required when ChatGPT quota monitoring is enabled.");
+    }
+    if (!(Buffer.byteLength(encryptionKey, "utf8") >= 32)) {
+      throw new Error("CHATGPT_ENC_KEY must be at least 32 bytes (or use base64: prefix with a 32-byte key).");
+    }
+    if (dbPath !== ":memory:") {
+      if (dbPath === observatory.dbPath) {
+        throw new Error("CHATGPT_DB_PATH must be separate from OBSERVATORY_DB_PATH.");
+      }
+      if (dbPath === agentRouterDbPath) {
+        throw new Error("CHATGPT_DB_PATH must be separate from the AgentRouter DB path.");
+      }
+    }
+  }
+  return {
+    enabled,
+    dbPath,
+    encryptionKey,
+    probeIntervalMinutes: parseBoundedInteger("CHATGPT_PROBE_INTERVAL_MINUTES", 5, 1, 1440),
+    probeTimeoutMs: parseBoundedInteger("CHATGPT_PROBE_TIMEOUT_MS", 30_000, 1_000, 120_000),
+  };
+}
+
 function parseRequiredBoundedInteger(
   name: string,
   fallback: number,
@@ -666,6 +712,7 @@ export function loadConfig(): AppConfig {
   const observatory = loadObservatoryConfig(dataDir, ompQuota, dbPath);
   const antigravity = loadAntigravityConfig(dataDir, observatory, dbPath);
   const commandcode = loadCommandCodeConfig(dataDir, observatory, dbPath);
+  const chatgpt = loadChatgptConfig(dataDir, observatory, dbPath);
   const collector = loadCollectorConfig();
   const nativeBrowser = loadNativeBrowserConfig(
     dataDir,
@@ -716,6 +763,7 @@ export function loadConfig(): AppConfig {
     observatory,
     antigravity,
     commandcode,
+    chatgpt,
     collector,
     dashboardAuth,
   };

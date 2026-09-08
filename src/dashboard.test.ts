@@ -89,6 +89,13 @@ function createTestConfig(
       probeIntervalMinutes: 5,
       probeTimeoutMs: 30_000,
     },
+    chatgpt: {
+      enabled: false,
+      dbPath: ":memory:",
+      encryptionKey: null,
+      probeIntervalMinutes: 5,
+      probeTimeoutMs: 30_000,
+    },
     maxRecentRuns: 500,
     telegram: {
       botToken: null,

@@ -1,0 +1,13 @@
+/* ChatGPT/Codex quota page — reuses the command-code window/bar/stat styles. */
+.cg-status-strip { display: flex; gap: 8px; align-items: center; margin-bottom: 16px; flex-wrap: wrap; }
+.cg-status-strip .chip { background: rgba(255,255,255,0.06); padding: 6px 10px; border-radius: 999px; font-size: 13px; }
+.cg-account { margin-bottom: 16px; }
+.cg-account-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
+.cg-account-head h3 { margin: 0 0 2px; font-size: 18px; }
+.cg-account-actions { display: flex; gap: 8px; }
+.cg-error { color: #ff8a80; margin: 8px 0 0; font-size: 13px; }
+.cg-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 12px; margin: 14px 0; }
+.cg-stat { display: flex; flex-direction: column; gap: 4px; }
+.cg-stat strong { font-size: 20px; }
+#cg-oauth-panel { max-width: 440px; }
+#cg-oauth-panel .field { margin: 10px 0; }

@@ -11,12 +11,14 @@
     <link rel="stylesheet" href="./dashboard.css">
     <link rel="stylesheet" href="./antigravity.css">
     <link rel="stylesheet" href="./commandcode.css">
+    <link rel="stylesheet" href="./chatgpt.css">
     <script src="./vendor/chart.umd.js" defer></script>
     <script src="./vendor/morphdom.js" defer></script>
     <script src="./live-kit.js" defer></script>
     <script src="./dashboard.js" defer></script>
     <script src="./antigravity.js" defer></script>
     <script src="./commandcode.js" defer></script>
+    <script src="./chatgpt.js" defer></script>
   </head>
   <body>
     <a class="skip-link" href="#main-content">Skip to observatory content</a>
@@ -67,6 +69,10 @@
           <button id="nav-commandcode" class="nav-card" type="button" data-view="commandcode" aria-label="Command Code view">
             <span class="nav-icon">CC</span>
             <span><strong>Command Code</strong><small>Subscription quota</small></span>
+          </button>
+          <button id="nav-chatgpt" class="nav-card" type="button" data-view="chatgpt" aria-label="ChatGPT view">
+            <span class="nav-icon">OG</span>
+            <span><strong>ChatGPT</strong><small>Codex quota</small></span>
           </button>
           <button id="nav-accounts" class="nav-card" type="button" data-view="accounts" aria-label="AgentRouter Accounts view">
             <span class="nav-icon">AR</span>
@@ -354,6 +360,42 @@
           </section>
 
           <div id="cc-body" class="dashboard-grid"></div>
+        </div>
+
+        <!-- VIEW: CHATGPT / CODEX -->
+        <div id="chatgpt-view" class="view-panel hidden">
+          <section class="view-header glass">
+            <div>
+              <p class="eyebrow">SUBSCRIPTION QUOTA</p>
+              <h1>ChatGPT / Codex</h1>
+              <p class="muted">ChatGPT and Codex subscription accounts probed through the backend usage API — plan type, weekly and 5-hour window caps with reset countdowns, and reset credits. Access tokens stay encrypted on the server.</p>
+            </div>
+            <div class="view-actions">
+              <button id="cg-probe-all" class="btn ghost" type="button">Probe all now</button>
+              <button id="cg-add-open" class="btn primary" type="button">Add ChatGPT account</button>
+            </div>
+          </section>
+
+          <section id="cg-status" class="panel glass" hidden></section>
+
+          <section id="cg-oauth-panel" class="panel glass hidden">
+            <header class="panel-heading">
+              <div>
+                <h2>Add ChatGPT account</h2>
+                <p class="muted">Paste your ChatGPT/Codex access token (from the Codex auth store / auth.json). Tokens are encrypted at rest.</p>
+              </div>
+            </header>
+            <div class="form-grid">
+              <label class="field"><span>Access token</span><input id="cg-token" type="password" autocomplete="off" placeholder="eyJ... or session token"></label>
+              <label class="field"><span>Label (optional)</span><input id="cg-label" type="text" placeholder="ChatGPT Pro"></label>
+            </div>
+            <div class="panel-actions">
+              <button id="cg-oauth-submit" class="btn primary" type="button">Add account</button>
+              <button id="cg-oauth-cancel" class="btn ghost" type="button">Cancel</button>
+            </div>
+          </section>
+
+          <div id="cg-body" class="dashboard-grid"></div>
         </div>
 
         <!-- VIEW 3: PROVIDER CREDENTIALS -->

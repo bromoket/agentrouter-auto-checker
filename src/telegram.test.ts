@@ -85,6 +85,13 @@ function config(stateFilePath: string, overrides: Partial<AppConfig["telegram"]>
       probeIntervalMinutes: 5,
       probeTimeoutMs: 30_000,
     },
+    chatgpt: {
+      enabled: false,
+      dbPath: ":memory:",
+      encryptionKey: null,
+      probeIntervalMinutes: 5,
+      probeTimeoutMs: 30_000,
+    },
     maxRecentRuns: 500,
     ompQuota: {
       enabled: false,

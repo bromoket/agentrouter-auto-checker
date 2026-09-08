@@ -15,6 +15,8 @@ import { AntigravityCollector } from "./antigravity/collector";
 import { AntigravityStore } from "./antigravity/store";
 import { CommandCodeCollector } from "./commandcode/collector";
 import { CommandCodeStore } from "./commandcode/store";
+import { ChatgptCollector } from "./chatgpt/collector";
+import { ChatgptStore } from "./chatgpt/store";
 import { startDashboard } from "./dashboard";
 import { ObservatoryCoordinator } from "./observatory/coordinator";
 import { ObservatoryStore } from "./observatory/store";
@@ -198,6 +200,39 @@ async function main(): Promise<void> {
     console.log("commandcode: subscription quota monitoring enabled");
   }
 
+  let chatgptStore: ChatgptStore | null = null;
+  let chatgptCollector: ChatgptCollector | null = null;
+  if (config.chatgpt.enabled && observatoryCoordinator && config.chatgpt.encryptionKey) {
+    chatgptStore = new ChatgptStore(config.chatgpt.dbPath, config.chatgpt.encryptionKey);
+    chatgptCollector = new ChatgptCollector({
+      store: chatgptStore,
+      sink: {
+        ingestBatch: async (observedAt, identities, quotas) => {
+          await observatoryCoordinator.ingestBatch({
+            observedAt,
+            host: {
+              hostId: config.observatory.sourceHostId,
+              operatorLabel: "ChatGPT Node",
+              platform: process.platform,
+              collectorVersion: "chatgpt-direct",
+              lastSeenAt: observedAt,
+              status: "online",
+            },
+            identities,
+            quotas,
+          });
+        },
+        emitEvent: (candidate) => {
+          observatoryCoordinator.processEventCandidate(candidate);
+        },
+      },
+      probeIntervalMs: config.chatgpt.probeIntervalMinutes * 60_000,
+      probeTimeoutMs: config.chatgpt.probeTimeoutMs,
+      sourceHostId: config.observatory.sourceHostId,
+    });
+    console.log("chatgpt: subscription quota monitoring enabled");
+  }
+
   const retention = new ScreenshotRetentionManager({
     screenshotDir: config.screenshotDir,
   });
@@ -235,6 +270,7 @@ async function main(): Promise<void> {
     observatoryStore?.close();
     antigravityStore?.close();
     commandcodeStore?.close();
+    chatgptStore?.close();
     return;
   }
 
@@ -249,6 +285,10 @@ async function main(): Promise<void> {
   const commandcodeContext =
     commandcodeStore && commandcodeCollector && config.commandcode.enabled
       ? { store: commandcodeStore, collector: commandcodeCollector, config }
+      : null;
+  const chatgptContext =
+    chatgptStore && chatgptCollector && config.chatgpt.enabled
+      ? { store: chatgptStore, collector: chatgptCollector, config }
       : null;
   const collectorServer = config.collector.enabled && observatoryStore
     ? await startCollectorListener(config, observatoryStore)
@@ -276,6 +316,7 @@ async function main(): Promise<void> {
     observatoryContext,
     antigravityContext,
     commandcodeContext,
+    chatgptContext,
   );
   console.log(`dashboard: ${server.url}`);
   const automation = await settings.load();
@@ -294,6 +335,7 @@ async function main(): Promise<void> {
     coordinator.stopScheduler();
     antigravityCollector?.stop();
     commandcodeCollector?.stop();
+    chatgptCollector?.stop();
     await stopTelegramCommands?.();
     collectorServer?.close();
     server.stop(true);
@@ -301,6 +343,7 @@ async function main(): Promise<void> {
     observatoryStore?.close();
     antigravityStore?.close();
     commandcodeStore?.close();
+    chatgptStore?.close();
     store.close();
   };
   process.once("SIGINT", () => void shutdown());
