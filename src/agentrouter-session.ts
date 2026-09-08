@@ -39,21 +39,6 @@ function storageStatePath(config: AppConfig, account: GitHubAccount): string {
   return join(config.accountStateDir, `${account.id}.monitor.json`);
 }
 
-/**
- * Deterministic per-account CDP port derived from the account id, kept in a safe
- * unprivileged range that avoids the reserved worker/poller/dashboard/web ports.
- * This lets the read loop run one browser per account profile without collisions.
- */
-export function readBrowserPortForAccount(accountId: string, basePort: number): number {
-  let hash = 0;
-  for (let i = 0; i < accountId.length; i += 1) {
-    hash = (hash * 31 + accountId.charCodeAt(i)) >>> 0;
-  }
-  // 0..2499 offset, pinned to the 26000..28499 unprivileged band.
-  const offset = hash % 2500;
-  return 26000 + offset;
-}
-
 
 
 interface ReadSessionTransport {
@@ -193,17 +178,12 @@ class NodeReadSessionTransport implements ReadSessionTransport {
 
   async poll(account: GitHubAccount, config: AppConfig): Promise<unknown> {
     this.assertOpen();
-    // Option A: reuse the account's own verified Chrome profile so reads are WAF-trusted.
-    // Derive a dedicated CDP port per account to avoid collisions with the full-cycle
-    // worker port and other account read browsers.
-    const accountProfileDir = resolve(join(config.browserProfileDir, account.id));
-    const accountPort = readBrowserPortForAccount(account.id, config.browserPollerCdpPort);
     return this.request({
       type: "poll",
       browser: {
         executablePath: config.browserExecutable,
-        userDataDir: accountProfileDir,
-        port: accountPort,
+        userDataDir: config.browserPollerProfileDir,
+        port: config.browserPollerCdpPort,
         startupTimeoutMs: config.browserStartTimeoutMs,
       },
       account: {
