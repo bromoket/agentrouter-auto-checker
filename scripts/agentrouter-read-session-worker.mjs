@@ -274,43 +274,61 @@ class ReadSessionRuntime {
 
   async poll(request) {
     const runtime = await this.accountRuntime(request);
-    const userId = await this.storedUserId(request);
-    let page = runtime.page;
-    if (page === null || page.isClosed()) {
-      page = runtime.context.pages().find((candidate) => !candidate.isClosed()) ?? await runtime.context.newPage();
-      runtime.page = page;
-    }
-    const navigationTimeout = Math.min(request.account.requestTimeoutMs, 30_000);
-    if (!runtime.pageLoaded) {
-      await page.goto(new URL("/console/", request.account.baseUrl).toString(), {
-        waitUntil: "domcontentloaded",
-        timeout: navigationTimeout,
-      });
-      runtime.pageLoaded = true;
-    }
-    let observation = await this.observation(page, request, userId);
-    if (observation?.error) throw new Error(observation.error);
-    let payload = parseAgentRouterPayload(observation);
-    if (payload === null) {
-      try {
+    try {
+      const userId = await this.storedUserId(request);
+      let page = runtime.page;
+      if (page === null || page.isClosed()) {
+        page = runtime.context.pages().find((candidate) => !candidate.isClosed()) ?? await runtime.context.newPage();
+        runtime.page = page;
+      }
+      const navigationTimeout = Math.min(request.account.requestTimeoutMs, 30_000);
+      if (!runtime.pageLoaded) {
         await page.goto(new URL("/console/", request.account.baseUrl).toString(), {
           waitUntil: "domcontentloaded",
           timeout: navigationTimeout,
         });
-      } catch {
-        // The authoritative read below decides whether the session survived.
+        runtime.pageLoaded = true;
       }
-      observation = await this.observation(page, request, userId);
+      let observation = await this.observation(page, request, userId);
       if (observation?.error) throw new Error(observation.error);
-      payload = parseAgentRouterPayload(observation);
+      let payload = parseAgentRouterPayload(observation);
+      if (payload === null) {
+        try {
+          await page.goto(new URL("/console/", request.account.baseUrl).toString(), {
+            waitUntil: "domcontentloaded",
+            timeout: navigationTimeout,
+          });
+        } catch {
+          // The authoritative read below decides whether the session survived.
+        }
+        observation = await this.observation(page, request, userId);
+        if (observation?.error) throw new Error(observation.error);
+        payload = parseAgentRouterPayload(observation);
+      }
+      if (payload === null) {
+        throw new SessionDeadError(
+          "AgentRouter read session is no longer authenticated after a console reload.",
+        );
+      }
+      return payload;
+    } finally {
+      // Release the account's Chrome profile lock after each poll so the full
+      // (grant) cycle can launch on the same verified profile. The WAF trust
+      // persists in the profile directory, so the next read reuses it safely.
+      await this.dropRuntimeBrowser(request.account.id).catch(() => undefined);
     }
-    if (payload === null) {
-      await this.drop(request.account.id);
-      throw new SessionDeadError(
-        "AgentRouter read session is no longer authenticated after a console reload.",
-      );
+  }
+
+  /** Close only the per-account browser connection (release its profile lock). */
+  async dropRuntimeBrowser(accountId) {
+    const runtime = this.accounts.get(accountId);
+    if (!runtime) return;
+    this.accounts.delete(accountId);
+    if (runtime.connection) {
+      await runtime.connection.close().catch(() => undefined);
+    } else {
+      await runtime.context.close().catch(() => undefined);
     }
-    return payload;
   }
 }
 
