@@ -31,7 +31,7 @@ describe("SettingsStore", () => {
       activityLookbackDays: {},
     })).toMatchObject({
       intervalMinutes: DEFAULT_AUTOMATION_SETTINGS.intervalMinutes,
-      endpointPollingEnabled: false,
+      endpointPollingEnabled: true,
       endpointPollIntervalMinutes: DEFAULT_AUTOMATION_SETTINGS.endpointPollIntervalMinutes,
       accountDelaySeconds: DEFAULT_AUTOMATION_SETTINGS.accountDelaySeconds,
       twoFactorTimeoutMinutes: DEFAULT_AUTOMATION_SETTINGS.twoFactorTimeoutMinutes,
@@ -56,7 +56,7 @@ describe("SettingsStore", () => {
       activityLookbackDays: 14,
     });
     expect(saved.intervalMinutes).toBe(5);
-    expect(saved.endpointPollingEnabled).toBe(false);
+    expect(saved.endpointPollingEnabled).toBe(true);
     expect(saved.twoFactorTimeoutMinutes).toBe(30);
     expect(saved.activityLookbackDays).toBe(14);
     expect(await store.load()).toEqual(saved);
@@ -82,5 +82,33 @@ describe("SettingsStore", () => {
     } else {
       expect(validateAutomationSettings({ captureScreenshots: true }).captureScreenshots).toBe(true);
     }
+  });
+});
+
+describe("grant and persistent-session settings", () => {
+  test("defaults enable persistent session reuse and a 12h grant interval", () => {
+    expect(DEFAULT_AUTOMATION_SETTINGS.reusePersistentSession).toBe(true);
+    expect(DEFAULT_AUTOMATION_SETTINGS.grantIntervalHours).toBe(12);
+  });
+
+  test("validates grantIntervalHours bounds", () => {
+    const base = { ...DEFAULT_AUTOMATION_SETTINGS };
+    expect(validateAutomationSettings({ ...base, grantIntervalHours: 4 }).grantIntervalHours).toBe(4);
+    expect(validateAutomationSettings({ ...base, grantIntervalHours: 168 }).grantIntervalHours).toBe(168);
+    expect(validateAutomationSettings({ ...base, grantIntervalHours: 1 }).grantIntervalHours).toBe(4);
+    expect(validateAutomationSettings({ ...base, grantIntervalHours: 500 }).grantIntervalHours).toBe(168);
+  });
+
+  test("reusePersistentSession coerces to boolean with default true", () => {
+    const base = { ...DEFAULT_AUTOMATION_SETTINGS };
+    expect(validateAutomationSettings({ ...base, reusePersistentSession: false }).reusePersistentSession).toBe(false);
+    expect(validateAutomationSettings({ ...base, reusePersistentSession: "no" }).reusePersistentSession).toBe(true);
+  });
+
+  test("reader grants old version-1 files without the new keys", () => {
+    const old = { ...DEFAULT_AUTOMATION_SETTINGS, grantIntervalHours: undefined as never, reusePersistentSession: undefined as never };
+    const parsed = validateAutomationSettings(old);
+    expect(parsed.grantIntervalHours).toBe(12);
+    expect(parsed.reusePersistentSession).toBe(true);
   });
 });

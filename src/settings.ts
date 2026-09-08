@@ -13,6 +13,8 @@ export interface AutomationSettings {
   twoFactorTimeoutMinutes: number;
   captureScreenshots: boolean;
   activityLookbackDays: number;
+  grantIntervalHours: number;
+  reusePersistentSession: boolean;
 }
 
 interface SettingsFile {
@@ -23,7 +25,7 @@ interface SettingsFile {
 export const DEFAULT_AUTOMATION_SETTINGS: AutomationSettings = {
   schedulerEnabled: true,
   intervalMinutes: 60,
-  endpointPollingEnabled: false,
+  endpointPollingEnabled: true,
   endpointPollIntervalMinutes: 1,
   accountDelaySeconds: 5,
   runOnStart: false,
@@ -31,6 +33,8 @@ export const DEFAULT_AUTOMATION_SETTINGS: AutomationSettings = {
   twoFactorTimeoutMinutes: 5,
   captureScreenshots: false,
   activityLookbackDays: 7,
+  grantIntervalHours: 12,
+  reusePersistentSession: true,
 };
 
 function boundedInteger(value: unknown, fallback: number, minimum: number, maximum: number): number {
@@ -63,7 +67,10 @@ export function validateAutomationSettings(value: unknown): AutomationSettings {
       5,
       10_080,
     ),
-    endpointPollingEnabled: false,
+    endpointPollingEnabled: booleanValue(
+      candidate.endpointPollingEnabled,
+      DEFAULT_AUTOMATION_SETTINGS.endpointPollingEnabled,
+    ),
     endpointPollIntervalMinutes: boundedInteger(
       candidate.endpointPollIntervalMinutes,
       DEFAULT_AUTOMATION_SETTINGS.endpointPollIntervalMinutes,
@@ -98,6 +105,16 @@ export function validateAutomationSettings(value: unknown): AutomationSettings {
       DEFAULT_AUTOMATION_SETTINGS.activityLookbackDays,
       1,
       28,
+    ),
+    grantIntervalHours: boundedInteger(
+      candidate.grantIntervalHours,
+      DEFAULT_AUTOMATION_SETTINGS.grantIntervalHours,
+      4,
+      168,
+    ),
+    reusePersistentSession: booleanValue(
+      candidate.reusePersistentSession,
+      DEFAULT_AUTOMATION_SETTINGS.reusePersistentSession,
     ),
   };
 }

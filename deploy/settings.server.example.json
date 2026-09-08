@@ -3,11 +3,15 @@
   "automation": {
     "schedulerEnabled": true,
     "intervalMinutes": 60,
+    "endpointPollingEnabled": true,
+    "endpointPollIntervalMinutes": 1,
     "accountDelaySeconds": 5,
     "runOnStart": false,
     "openDashboardOnStart": false,
     "twoFactorTimeoutMinutes": 10,
     "captureScreenshots": false,
-    "activityLookbackDays": 28
+    "activityLookbackDays": 28,
+    "grantIntervalHours": 12,
+    "reusePersistentSession": true
   }
 }
