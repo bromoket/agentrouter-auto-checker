@@ -14,6 +14,7 @@ import { escapeHtml, observedAt, type TelegramNotifier } from "../telegram";
 export function formatObservatoryEventMessage(
   event: StoredObservatoryEvent,
   dashboardUrl?: string,
+  detail?: { provider?: string | null; windowId?: string | null; usedUnits?: number | null; totalUnits?: number | null; remainingFraction?: number | null; resetAt?: string | null; remainingUnits?: number | null },
 ): string {
   const emoji =
     event.severity === "critical"
@@ -27,24 +28,50 @@ export function formatObservatoryEventMessage(
             : "ℹ️";
   const category = event.eventType.replaceAll("_", " ");
   const safeTitle = category.replace(/\b\w/g, (letter) => letter.toUpperCase());
+  const providerLabel = detail?.provider
+    ? detail.provider === "openai-codex"
+      ? "OpenAI Codex / ChatGPT"
+      : detail.provider === "google-antigravity"
+        ? "Google Antigravity"
+        : detail.provider === "commandcode"
+          ? "Command Code"
+          : safeLabel(String(detail.provider))
+    : null;
+  const windowLabel = detail?.windowId
+    ? detail.windowId === "weekly"
+      ? "Weekly window"
+      : detail.windowId === "5h"
+        ? "5-hour window"
+        : safeLabel(String(detail.windowId))
+    : null;
+
   const lines: string[] = [
     `${emoji} <b>${escapeHtml(safeTitle)}</b>`,
     "",
-    `${escapeHtml(event.severity)} ${escapeHtml(category)} event`,
-    "",
   ];
 
-  if (event.hostId) {
-    lines.push(`<b>Host:</b> ${escapeHtml(event.hostId)}`);
-  }
-  if (event.identityId) {
-    lines.push(`<b>Identity:</b> ${escapeHtml(event.identityId)}`);
-  }
-  if (event.sessionId) {
-    lines.push(`<b>Session:</b> ${escapeHtml(event.sessionId)}`);
+  if (providerLabel) lines.push(`<b>Provider:</b> ${escapeHtml(providerLabel)}`);
+  if (windowLabel) lines.push(`<b>Window:</b> ${escapeHtml(windowLabel)}`);
+  if (detail && detail.totalUnits && detail.totalUnits > 0) {
+    const used = detail.usedUnits ?? 0;
+    const remaining = detail.remainingUnits ?? Math.max(0, detail.totalUnits - used);
+    const pct =
+      detail.remainingFraction !== null && detail.remainingFraction !== undefined
+        ? Math.round(detail.remainingFraction * 100)
+        : Math.round((remaining / detail.totalUnits) * 100);
+    lines.push(`<b>Used:</b> ${escapeHtml(String(used))} / ${escapeHtml(String(detail.totalUnits))}`);
+    lines.push(`<b>Remaining:</b> ${escapeHtml(String(remaining))} (${pct}%)`);
+    if (detail.resetAt) {
+      lines.push(`<b>Resets:</b> ${escapeHtml(observedAt(detail.resetAt))}`);
+    }
   }
 
-  lines.push(`<b>Severity:</b> ${escapeHtml(event.severity.toUpperCase())}`);
+  if (event.identityId) lines.push(`<b>Identity:</b> ${escapeHtml(event.identityId)}`);
+  if (event.hostId) lines.push(`<b>Host:</b> ${escapeHtml(event.hostId)}`);
+  if (event.sessionId) lines.push(`<b>Session:</b> ${escapeHtml(event.sessionId)}`);
+  if (event.windowId && !windowLabel) lines.push(`<b>Window:</b> ${escapeHtml(safeLabel(event.windowId))}`);
+  if (event.meter) lines.push(`<b>Meter:</b> ${escapeHtml(safeLabel(event.meter))}`);
+  if (event.severity) lines.push(`<b>Severity:</b> ${escapeHtml(event.severity.toUpperCase())}`);
   lines.push(`<b>Observed:</b> ${escapeHtml(observedAt(event.occurredAt))}`);
 
   if (dashboardUrl) {
@@ -53,6 +80,10 @@ export function formatObservatoryEventMessage(
   }
 
   return lines.join("\n");
+}
+
+function safeLabel(value: string): string {
+  return value.replace(/[_\-]+/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
 export function categorizeDeliveryError(error: unknown): DeliveryErrorCategory {
@@ -139,7 +170,8 @@ export class ObservatoryDeliveryManager {
         continue;
       }
 
-      const html = formatObservatoryEventMessage(event, this.config.telegram.dashboardUrl);
+      const detail = this.lookupEventDetail(event);
+      const html = formatObservatoryEventMessage(event, this.config.telegram.dashboardUrl, detail);
       try {
         const result = await this.telegram.sendObservatoryMessage(html);
         const acknowledged = this.store.markDeliverySent(lease.deliveryId, leaseToken, {
@@ -162,6 +194,27 @@ export class ObservatoryDeliveryManager {
     }
 
     return { processed, sent, failed };
+  }
+
+  /** Look up quota-window detail for quota-type events to enrich the Telegram message. */
+  private lookupEventDetail(
+    event: StoredObservatoryEvent,
+  ): { provider?: string | null; windowId?: string | null; usedUnits?: number | null; totalUnits?: number | null; remainingFraction?: number | null; resetAt?: string | null; remainingUnits?: number | null } | undefined {
+    if (!event.identityId || !event.windowId) return undefined;
+    if (!event.eventType.startsWith("quota") && event.eventType !== "reset_credit_increased" && event.eventType !== "reset_credit_decreased") {
+      return undefined;
+    }
+    const window = this.store.getCurrentQuotaWindow(event.identityId, event.windowId, event.bucketId ?? undefined);
+    if (!window) return undefined;
+    return {
+      provider: event.provider ?? null,
+      windowId: event.windowId,
+      usedUnits: window.usedUnits,
+      totalUnits: window.totalUnits,
+      remainingFraction: window.remainingFraction,
+      resetAt: window.resetsAt,
+      remainingUnits: window.remainingUnits,
+    };
   }
 
   async sendSyntheticDelivery(params: {

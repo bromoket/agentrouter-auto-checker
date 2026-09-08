@@ -252,9 +252,39 @@ describe("Delivery error categorization and message formatting", () => {
 
     const formatted = formatObservatoryEventMessage(event, "http://127.0.0.1:3100");
     expect(formatted).toContain("Quota Warning");
-    expect(formatted).toContain("warning quota warning event");
-    expect(formatted).toContain("<b>Host:</b> host-safe");
+    expect(formatted).toContain("<b>Severity:</b> WARNING");
     expect(formatted).toContain("<b>Identity:</b> id-safe");
     expect(formatted).toContain("<a href=\"http://127.0.0.1:3100\">Open Fleet Observatory</a>");
+  });
+
+  test("renders rich provider/window detail for quota events", () => {
+    const event: StoredObservatoryEvent = {
+      eventId: "evt-1000",
+      eventType: "quota_warning",
+      severity: "warning",
+      fingerprint: "fp-detail",
+      occurredAt: "2026-09-01T12:00:00.000Z",
+      hostId: "host",
+      identityId: "cc-g-1",
+      provider: "commandcode",
+      windowId: "weekly",
+      meter: "credits",
+      createdAt: "2026-09-01T12:00:00.000Z",
+    };
+    const formatted = formatObservatoryEventMessage(event, "http://127.0.0.1:3100", {
+      provider: "commandcode",
+      windowId: "weekly",
+      usedUnits: 20,
+      totalUnits: 35,
+      remainingFraction: 0.43,
+      resetAt: "2026-09-15T09:00:00.000Z",
+      remainingUnits: 15,
+    });
+    expect(formatted).toContain("Command Code");
+    expect(formatted).toContain("Weekly window");
+    expect(formatted).toContain("<b>Used:</b> 20 / 35");
+    expect(formatted).toContain("<b>Remaining:</b> 15 (43%)");
+    expect(formatted).toContain("<b>Resets:</b>");
+    expect(formatted).toContain("<b>Meter:</b> Credits");
   });
 });
