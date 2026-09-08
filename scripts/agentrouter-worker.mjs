@@ -1591,6 +1591,7 @@ async function runWorker({ account, config }) {
     apiCalls: [],
     loggedOut: false,
     sessionReused: false,
+    sessionKept: false,
     errorMessage: undefined,
     screenshotPath: undefined,
   };
@@ -1864,6 +1865,7 @@ async function runWorker({ account, config }) {
       }
     } else {
       result.loggedOut = false;
+      result.sessionKept = true;
       progress(
         "persisted",
         "Data captured. Keeping the live session for the next read.",
