@@ -39,6 +39,18 @@ function storageStatePath(config: AppConfig, account: GitHubAccount): string {
   return join(config.accountStateDir, `${account.id}.monitor.json`);
 }
 
+/**
+ * Deterministic per-account loopback CDP port (26000..28499) so read browsers use the
+ * account's own profile without colliding with the full-cycle worker port (19222).
+ */
+export function readBrowserPortForAccount(accountId: string, _basePort: number): number {
+  let hash = 0;
+  for (let i = 0; i < accountId.length; i += 1) {
+    hash = (hash * 31 + accountId.charCodeAt(i)) >>> 0;
+  }
+  return 26000 + (hash % 2500);
+}
+
 
 
 interface ReadSessionTransport {
@@ -178,12 +190,17 @@ class NodeReadSessionTransport implements ReadSessionTransport {
 
   async poll(account: GitHubAccount, config: AppConfig): Promise<unknown> {
     this.assertOpen();
+    // Reuse the account's own WAF-verified Chrome profile so reads are not
+    // re-challenged by the access-verification WAF. A per-account loopback port
+    // keeps read browsers isolated from the full-cycle worker port.
+    const accountProfileDir = resolve(join(config.browserProfileDir, account.id));
+    const accountPort = readBrowserPortForAccount(account.id, config.browserPollerCdpPort);
     return this.request({
       type: "poll",
       browser: {
         executablePath: config.browserExecutable,
-        userDataDir: config.browserPollerProfileDir,
-        port: config.browserPollerCdpPort,
+        userDataDir: accountProfileDir,
+        port: accountPort,
         startupTimeoutMs: config.browserStartTimeoutMs,
       },
       account: {

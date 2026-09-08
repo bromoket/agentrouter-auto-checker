@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { readBrowserPortForAccount } from "./agentrouter-session";
 import type { GitHubAccount } from "./accounts";
 import type { AppConfig } from "./config";
 import { DefaultAgentRouterReadSessions } from "./agentrouter-session";
@@ -35,5 +36,20 @@ describe("DefaultAgentRouterReadSessions", () => {
       ["drop", "acc-1"],
       ["close"],
     ]);
+  });
+});
+
+describe("readBrowserPortForAccount", () => {
+  test("maps account ids to distinct bounded unprivileged ports", () => {
+    const p1 = readBrowserPortForAccount("acc-1", 19223);
+    const p2 = readBrowserPortForAccount("acc-2", 19223);
+    expect(p1).toBeGreaterThanOrEqual(26000);
+    expect(p1).toBeLessThanOrEqual(28499);
+    expect(p2).toBeGreaterThanOrEqual(26000);
+    expect(p2).toBeLessThanOrEqual(28499);
+  });
+
+  test("is deterministic for the same account id", () => {
+    expect(readBrowserPortForAccount("acc-1", 19223)).toBe(readBrowserPortForAccount("acc-1", 19223));
   });
 });

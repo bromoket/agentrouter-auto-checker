@@ -150,52 +150,47 @@ class ReadSessionRuntime {
     const runtime = this.accounts.get(accountId);
     if (!runtime) return;
     this.accounts.delete(accountId);
-    await runtime.context.close().catch(() => undefined);
+    if (runtime.connection) {
+      await runtime.connection.close().catch(() => undefined);
+    } else {
+      await runtime.context.close().catch(() => undefined);
+    }
   }
 
   async closeBrowser() {
     await Promise.all([...this.accounts.keys()].map((id) => this.drop(id)));
-    const connection = this.connection;
     this.connection = null;
     this.browserKey = null;
-    if (connection) await connection.close();
-  }
-
-  async browser(config) {
-    const key = JSON.stringify(config);
-    if (this.connection?.browser.isConnected() && this.browserKey === key) return this.connection.browser;
-    await this.closeBrowser();
-    this.connection = await connectNativeChrome(chromium, config);
-    this.browserKey = key;
-    return this.connection.browser;
   }
 
   async accountRuntime(request) {
-    let stateMtimeMs;
-    try {
-      stateMtimeMs = (await stat(request.account.statePath)).mtimeMs;
-    } catch {
-      throw new SessionDeadError("No AgentRouter monitor session has been captured for this account yet.");
-    }
+    // Reuse the account's own WAF-verified Chrome profile and its default context,
+    // which carries the access-verification trust persisted in the profile. A fresh
+    // newContext({ storageState }) on a different profile would be re-challenged by
+    // the AgentRouter WAF.
     const runtimeKey = JSON.stringify({
       browser: request.browser,
-      statePath: request.account.statePath,
       baseUrl: request.account.baseUrl,
     });
     const existing = this.accounts.get(request.account.id);
-    if (
-      existing &&
-      existing.runtimeKey === runtimeKey &&
-      existing.stateMtimeMs === stateMtimeMs &&
-      existing.context &&
-      this.connection?.browser.isConnected()
-    ) {
+    if (existing && existing.runtimeKey === runtimeKey && existing.context && existing.connection?.browser.isConnected()) {
       return existing;
     }
-    await this.drop(request.account.id);
-    const browser = await this.browser(request.browser);
-    const context = await browser.newContext({ storageState: request.account.statePath });
-    const runtime = { runtimeKey, stateMtimeMs, context, page: null, pageLoaded: false };
+    if (existing?.connection) {
+      await existing.connection.close().catch(() => undefined);
+    }
+    const connection = await connectNativeChrome(chromium, request.browser);
+    const browser = connection.browser;
+    const defaults = browser.contexts();
+    const context = defaults.length > 0 ? defaults[0] : await browser.newContext();
+    const runtime = {
+      runtimeKey,
+      stateMtimeMs: Date.now(),
+      context,
+      page: null,
+      pageLoaded: false,
+      connection,
+    };
     this.accounts.set(request.account.id, runtime);
     return runtime;
   }
@@ -265,43 +260,61 @@ class ReadSessionRuntime {
 
   async poll(request) {
     const runtime = await this.accountRuntime(request);
-    const userId = await this.storedUserId(request);
-    let page = runtime.page;
-    if (page === null || page.isClosed()) {
-      page = runtime.context.pages().find((candidate) => !candidate.isClosed()) ?? await runtime.context.newPage();
-      runtime.page = page;
-    }
-    const navigationTimeout = Math.min(request.account.requestTimeoutMs, 30_000);
-    if (!runtime.pageLoaded) {
-      await page.goto(new URL("/console/", request.account.baseUrl).toString(), {
-        waitUntil: "domcontentloaded",
-        timeout: navigationTimeout,
-      });
-      runtime.pageLoaded = true;
-    }
-    let observation = await this.observation(page, request, userId);
-    if (observation?.error) throw new Error(observation.error);
-    let payload = parseAgentRouterPayload(observation);
-    if (payload === null) {
-      try {
+    try {
+      const userId = await this.storedUserId(request);
+      let page = runtime.page;
+      if (page === null || page.isClosed()) {
+        page = runtime.context.pages().find((candidate) => !candidate.isClosed()) ?? await runtime.context.newPage();
+        runtime.page = page;
+      }
+      const navigationTimeout = Math.min(request.account.requestTimeoutMs, 30_000);
+      if (!runtime.pageLoaded) {
         await page.goto(new URL("/console/", request.account.baseUrl).toString(), {
           waitUntil: "domcontentloaded",
           timeout: navigationTimeout,
         });
-      } catch {
-        // The authoritative read below decides whether the session survived.
+        runtime.pageLoaded = true;
       }
-      observation = await this.observation(page, request, userId);
+      let observation = await this.observation(page, request, userId);
       if (observation?.error) throw new Error(observation.error);
-      payload = parseAgentRouterPayload(observation);
+      let payload = parseAgentRouterPayload(observation);
+      if (payload === null) {
+        try {
+          await page.goto(new URL("/console/", request.account.baseUrl).toString(), {
+            waitUntil: "domcontentloaded",
+            timeout: navigationTimeout,
+          });
+        } catch {
+          // The authoritative read below decides whether the session survived.
+        }
+        observation = await this.observation(page, request, userId);
+        if (observation?.error) throw new Error(observation.error);
+        payload = parseAgentRouterPayload(observation);
+      }
+      if (payload === null) {
+        throw new SessionDeadError(
+          "AgentRouter read session is no longer authenticated after a console reload.",
+        );
+      }
+      return payload;
+    } finally {
+      // Release the account's Chrome profile lock after each read so the full
+      // (grant) cycle can launch on the same verified profile. The WAF trust
+      // persists in the profile directory, so the next read reuses it safely.
+      await this.dropRuntimeBrowser(request.account.id).catch(() => undefined);
     }
-    if (payload === null) {
-      await this.drop(request.account.id);
-      throw new SessionDeadError(
-        "AgentRouter read session is no longer authenticated after a console reload.",
-      );
+  }
+
+  /** Close only the per-account browser connection (release its profile lock). */
+  async dropRuntimeBrowser(accountId) {
+    const runtime = this.accounts.get(accountId);
+    if (!runtime) return;
+    this.accounts.delete(accountId);
+    if (runtime.connection) {
+      await runtime.connection.close().catch(() => undefined);
+    } else {
+      await runtime.context.close().catch(() => undefined);
     }
-    return payload;
   }
 }
 
