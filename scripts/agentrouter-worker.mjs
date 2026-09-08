@@ -275,6 +275,30 @@ async function persistGithubState(context, statePath) {
 }
 
 
+/**
+ * Persist the AgentRouter monitor session (the full browser storage state) so the
+ * 1-minute read loop can reuse it as a Playwright storageState without re-login.
+ * The state holds the AgentRouter session cookie(s) and the `user` localStorage
+ * record at the AgentRouter origin; it is the only input the read poller needs.
+ */
+async function persistMonitorState(context, statePath) {
+  const state = await context.storageState();
+  const cookies = Array.isArray(state?.cookies) ? state.cookies : [];
+  const origins = Array.isArray(state?.origins) ? state.origins : [];
+  if (cookies.length === 0) {
+    throw new Error("Authenticated AgentRouter monitor state did not contain reusable cookies.");
+  }
+  const temporaryPath = `${statePath}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    await writeFile(temporaryPath, `${JSON.stringify({ cookies, origins })}\n`, { mode: 0o600, flag: "wx" });
+    await restrictSecretFile(temporaryPath);
+    await rename(temporaryPath, statePath);
+    await restrictSecretFile(statePath);
+  } finally {
+    await unlink(temporaryPath).catch(() => undefined);
+  }
+}
+
 async function markProfileReady(profilePath) {
   const markerPath = path.join(profilePath, ".agentrouter-profile-ready");
   await writeFile(markerPath, `${new Date().toISOString()}\n`, { mode: 0o600 });
@@ -1730,6 +1754,9 @@ async function runWorker({ account, config }) {
         `AgentRouter authenticated user mismatch: browser user ${authenticatedUserId}, API user ${authoritativeUser.id}.`,
       );
     }
+    // Capture the authenticated AgentRouter session so the 1-minute read loop can
+    // reuse it (constant balance/usage reads) without any re-login or WAF check.
+    await persistMonitorState(context, monitorStatePath);
     result.loginMs = Date.now() - loginStarted;
     result.sessionReused = Boolean(profileAvailable || storedGithubState) && !authentication.credentialsSubmitted;
     log(`[${account.label}] authenticated in ${result.loginMs}ms`);
@@ -1818,13 +1845,10 @@ async function runWorker({ account, config }) {
       result.apiCalls,
     ) ?? undefined;
 
-    if (shouldLogout({
-      grantMode: config.grantMode === true,
-      reusePersistentSession: config.reusePersistentSession,
-    })) {
+    if (shouldLogout({ reusePersistentSession: config.reusePersistentSession })) {
       progress(
         "logging-out",
-        "Data captured. Logging out (grant cycle) so the next sign-in can claim available grants.",
+        "Data captured. Logging out (legacy mode) so the next sign-in can claim available grants.",
         92,
       );
       result.loggedOut = await logoutAndPersist(
@@ -1846,25 +1870,41 @@ async function runWorker({ account, config }) {
         92,
       );
     }
-    try {
-      await unlink(monitorStatePath);
-    } catch (error) {
-      if (error?.code !== "ENOENT") throw error;
+    // Only discard the monitor session when we actually logged out. In read mode
+    // (persistent-session reuse) the monitor state feeds the 1-minute read poller
+    // and must survive the cycle so the next read can reuse the live session.
+    if (shouldLogout({ reusePersistentSession: config.reusePersistentSession })) {
+      try {
+        await unlink(monitorStatePath);
+      } catch (error) {
+        if (error?.code !== "ENOENT") throw error;
+      }
     }
 
     const failedCall = result.apiCalls.find((call) => !call.ok && !call.recovered);
     if (failedCall) {
       throw new Error(`AgentRouter UI step failed: ${failedCall.path} returned ${failedCall.status}.`);
     }
-    result.summary.authentication = "logged-out-after-collection";
-    log(`[${account.label}] data saved and AgentRouter logout confirmed`);
-    progress(
-      "complete",
-      preflightLoggedOut
-        ? "Snapshot saved. Prior and current AgentRouter sessions logged out."
-        : "Snapshot saved. AgentRouter logout confirmed.",
-      100,
-    );
+    result.summary.authentication = result.loggedOut
+      ? "logged-out-after-collection"
+      : "session-kept-for-read";
+    if (result.loggedOut) {
+      log(`[${account.label}] data saved and AgentRouter logout confirmed`);
+      progress(
+        "complete",
+        preflightLoggedOut
+          ? "Snapshot saved. Prior and current AgentRouter sessions logged out."
+          : "Snapshot saved. AgentRouter logout confirmed.",
+        100,
+      );
+    } else {
+      log(`[${account.label}] data saved; AgentRouter session kept alive for reads`);
+      progress(
+        "complete",
+        "Snapshot saved. Session kept alive for the 1-minute read loop.",
+        100,
+      );
+    }
   } catch (error) {
     result.status = "error";
     result.errorMessage = errorText(error);

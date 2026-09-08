@@ -4,6 +4,7 @@ import type { TelegramNotifier } from "../telegram";
 import { ObservatoryDeliveryManager } from "./delivery";
 import {
   buildQuotaTrackerKey,
+  createAgentRouterGrantEventCandidate,
   createDeterministicFingerprint,
   evaluateAgentRouterBalanceTransition,
   evaluateProviderTransition,
@@ -512,6 +513,18 @@ export class ObservatoryCoordinator {
             lowBalanceArmEpoch: transition.nextState.lowBalanceArmEpoch,
           });
           for (const candidate of transition.events) emitted.push(this.recordEventCandidate(candidate));
+
+          // A grant is a confirmed balance increase. Emit agentrouter_grant_received
+          // (deduped by account + observed timestamp + amount) so it feeds the
+          // notification policy once — never re-notify on a re-poll of the same grant.
+          if (balanceDelta !== null && balanceDelta > 0) {
+            emitted.push(this.recordEventCandidate(createAgentRouterGrantEventCandidate({
+              accountId: account.id,
+              amount: Math.round(balanceDelta * 100) / 100,
+              observedAt: snapshot.endedAt,
+              hostId: this.config.observatory.sourceHostId ?? null,
+            })));
+          }
         }
 
         if (snapshot.usagePoints.length > 0) {

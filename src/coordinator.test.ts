@@ -12,6 +12,7 @@ import { ObservatoryStore } from "./observatory/store";
 import { OmpQuotaPoller } from "./omp-quota";
 import { SettingsStore } from "./settings";
 import { Store } from "./storage";
+import { cycleMode } from "./coordinator-modes";
 const temporaryDirectories: string[] = [];
 
 afterEach(async () => {
@@ -104,6 +105,18 @@ function createTestConfig(directory: string, ompQuotaEnabled = false, observator
     }),
   };
 }
+
+describe("CheckCoordinator cycle mode decision", () => {
+  test("read loop never triggers logout; grant loop does", () => {
+    expect(cycleMode({ grantDue: false, reuse: true })).toBe("read");
+    expect(cycleMode({ grantDue: true, reuse: true })).toBe("grant");
+    expect(cycleMode({ grantDue: false, reuse: false })).toBe("full-logout");
+  });
+
+  test("grant due always wins even with reuse off", () => {
+    expect(cycleMode({ grantDue: true, reuse: false })).toBe("grant");
+  });
+});
 
 describe("CheckCoordinator OMP quota loop", () => {
   test("starts quota loop independently on scheduler start without blocking account runs", async () => {

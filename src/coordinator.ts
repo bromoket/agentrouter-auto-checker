@@ -92,6 +92,7 @@ export class CheckCoordinator {
     events: [],
   };
   private schedulerStarted = false;
+  private grantLoopStarted = false;
   private endpointPollerStarted = false;
   private ompQuotaPollerStarted = false;
   private readonly ompQuotaPoller: OmpQuotaPoller | null = null;
@@ -159,6 +160,10 @@ export class CheckCoordinator {
     this.schedulerStarted = true;
     this.status.schedulerActive = true;
     void this.schedulerLoop();
+    if (!this.grantLoopStarted) {
+      this.grantLoopStarted = true;
+      void this.grantLoop();
+    }
     if (!this.endpointPollerStarted) {
       this.endpointPollerStarted = true;
       void this.endpointPollingLoop();
@@ -174,6 +179,7 @@ export class CheckCoordinator {
 
   stopScheduler(): void {
     this.schedulerStarted = false;
+    this.grantLoopStarted = false;
     this.endpointPollerStarted = false;
     this.ompQuotaPollerStarted = false;
     this.status.schedulerActive = false;
@@ -202,6 +208,36 @@ export class CheckCoordinator {
       } catch (error) {
         console.error(`OMP quota monitor loop error: ${error instanceof Error ? error.message : String(error)}`);
         nextPollAt = Date.now() + 60_000;
+      }
+      await delay(1_000);
+    }
+  }
+
+  /**
+   * Periodic logout->login grant cycle. Runs the full browser worker in grant mode
+   * on `grantIntervalHours`, so AgentRouter re-claims the daily/random grant and the
+   * freshly captured session feeds the 1-minute read loop afterwards. This is the
+   * only scheduled full-browser cycle (Option B).
+   */
+  private async grantLoop(): Promise<void> {
+    let nextRunAt = Date.now() + (await this.settings.load()).grantIntervalHours * 3_600_000;
+    while (this.schedulerStarted && this.grantLoopStarted) {
+      try {
+        const settings = await this.settings.load();
+        if (settings.schedulerEnabled) {
+          if (Date.now() >= nextRunAt) {
+            // A grant cycle overlaps READ runs; skip if a cycle is already running.
+            if (!this.status.running) {
+              await this.runCycle(undefined, { grantMode: true });
+            }
+            nextRunAt = Date.now() + settings.grantIntervalHours * 3_600_000;
+          }
+        } else {
+          nextRunAt = Date.now() + settings.grantIntervalHours * 3_600_000;
+        }
+      } catch (error) {
+        console.error(`grant loop: ${error instanceof Error ? error.message : String(error)}`);
+        nextRunAt = Date.now() + 60_000;
       }
       await delay(1_000);
     }
@@ -281,7 +317,9 @@ export class CheckCoordinator {
       `[session-heal:${account.label}] read session expired; running an immediate browser cycle to restore minute polling.`,
     );
     try {
-      await this.runCycle(account.id);
+      // A session-heal re-establishes the live AgentRouter session, which is the
+      // same re-login work as the grant cycle (captures the monitor session).
+      await this.runCycle(account.id, { grantMode: true });
     } catch (error) {
       console.error(
         `[session-heal:${account.label}] recovery cycle failed: ${
@@ -292,9 +330,12 @@ export class CheckCoordinator {
   }
 
   private async schedulerLoop(): Promise<void> {
-    let firstEvaluation = true;
+    // Option B: the only scheduled full-browser cycle is the logout->login grant
+    // cycle, owned by grantLoop(). The 1-minute read loop handles constant balance
+    // /usage reads from the persistent session. This loop merely keeps the status
+    // (schedulerEnabled + nextScheduledRunAt reflecting the grant cadence) fresh.
     let nextRunAt: number | null = null;
-    let previousIntervalMinutes: number | null = null;
+    let previousGrantHours: number | null = null;
 
     while (this.schedulerStarted) {
       try {
@@ -303,26 +344,18 @@ export class CheckCoordinator {
         if (!settings.schedulerEnabled) {
           nextRunAt = null;
           this.status.nextScheduledRunAt = null;
-          firstEvaluation = false;
           await delay(1_000);
           continue;
         }
 
-        const intervalMs = settings.intervalMinutes * 60_000;
+        const grantMs = settings.grantIntervalHours * 3_600_000;
         if (nextRunAt === null) {
-          nextRunAt = firstEvaluation && settings.runOnStart ? Date.now() : Date.now() + intervalMs;
-        } else if (previousIntervalMinutes !== settings.intervalMinutes) {
-          nextRunAt = Math.min(nextRunAt, Date.now() + intervalMs);
+          nextRunAt = Date.now() + grantMs;
+        } else if (previousGrantHours !== settings.grantIntervalHours) {
+          nextRunAt = Math.min(nextRunAt, Date.now() + grantMs);
         }
-        previousIntervalMinutes = settings.intervalMinutes;
-        firstEvaluation = false;
+        previousGrantHours = settings.grantIntervalHours;
         this.status.nextScheduledRunAt = new Date(nextRunAt).toISOString();
-
-        if (Date.now() >= nextRunAt) {
-          await this.runCycle();
-          nextRunAt = Date.now() + intervalMs;
-          this.status.nextScheduledRunAt = new Date(nextRunAt).toISOString();
-        }
       } catch (error) {
         this.status.lastCycleError = `Scheduler: ${
           error instanceof Error ? error.message : String(error)
@@ -332,7 +365,7 @@ export class CheckCoordinator {
     }
   }
 
-  async runCycle(accountId?: string): Promise<boolean> {
+  async runCycle(accountId?: string, options?: { grantMode?: boolean }): Promise<boolean> {
     if (this.cycleClaimed) {
       return false;
     }
@@ -404,6 +437,7 @@ export class CheckCoordinator {
             this.challenges,
             {
               signal: this.activeAbortController.signal,
+              grantMode: options?.grantMode === true,
               onProgress: (progress) => {
                 const accountShare = 100 / selected.length;
                 const cyclePercent = accountIndex * accountShare + (progress.percent / 100) * accountShare;
