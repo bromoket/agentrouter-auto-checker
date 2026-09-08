@@ -2018,12 +2018,13 @@ function setActiveViewNavigation(name) {
 }
 
 function showView(name, options = {}) {
-  const valid = new Set(["overview", "quotas", "antigravity", "credentials", "accounts", "notifications", "events", "health"]);
+  const valid = new Set(["overview", "quotas", "antigravity", "commandcode", "credentials", "accounts", "notifications", "events", "health"]);
   if (!valid.has(name)) name = "overview";
   if (state.selectedId !== null) state.revealedTokens.clear();
   state.selectedId = null;
   state.activeView = name;
   if (name !== "antigravity") window.antigravityHide?.();
+  if (name !== "commandcode") window.commandcodeHide?.();
   state.viewRequest += 1;
   destroyCharts([...OVERVIEW_CHARTS, ...ACCOUNT_CHARTS]);
   document.querySelectorAll(".view-panel").forEach((panel) => panel.classList.toggle("hidden", panel.id !== `${name}-view`));

@@ -1,0 +1,20 @@
+/* Command Code monitoring page styles */
+.cc-status-strip { display: flex; gap: 8px; align-items: center; margin-bottom: 16px; flex-wrap: wrap; }
+.cc-status-strip .chip { background: rgba(255,255,255,0.06); padding: 6px 10px; border-radius: 999px; font-size: 13px; }
+.cc-account { margin-bottom: 16px; }
+.cc-account-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
+.cc-account-head h3 { margin: 0 0 2px; font-size: 18px; }
+.cc-account-actions { display: flex; gap: 8px; }
+.cc-error { color: #ff8a80; margin: 8px 0 0; font-size: 13px; }
+.cc-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 12px; margin: 14px 0; }
+.cc-stat { display: flex; flex-direction: column; gap: 4px; }
+.cc-stat strong { font-size: 20px; }
+.cc-window { margin: 8px 0; }
+.cc-window-head, .cc-window-foot { display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 4px; }
+.cc-bar { height: 10px; border-radius: 999px; background: rgba(255,255,255,0.08); overflow: hidden; }
+.cc-bar-fill { display: block; height: 100%; border-radius: 999px; }
+.cc-bar-fill-ok { background: linear-gradient(90deg, #38bdf8, #34d399); }
+.cc-bar-fill-warn { background: linear-gradient(90deg, #fbbf24, #f59e0b); }
+.cc-bar-fill-danger { background: linear-gradient(90deg, #f87171, #ef4444); }
+#cc-oauth-panel { max-width: 420px; }
+#cc-oauth-panel .field { margin: 10px 0; }
