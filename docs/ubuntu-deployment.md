@@ -83,9 +83,13 @@ sudo chown agentrouter:agentrouter /var/lib/agentrouter-monitor/data/settings.js
 sudo chmod 0600 /var/lib/agentrouter-monitor/data/settings.json
 ```
 Key production settings in `/var/lib/agentrouter-monitor/data/settings.json`:
-- `automation.schedulerEnabled: true` — enables automated hourly checks
-- `automation.intervalMinutes: 60` — interval between routine checks
+- `automation.schedulerEnabled: true` — enables the background loops
+- `automation.endpointPollingEnabled: true` — enables the 1-minute read loop (constant balance/usage reads)
+- `automation.endpointPollIntervalMinutes: 1` — how often the read loop polls the live AgentRouter session
+- `automation.grantIntervalHours: 12` — how often the logout→login grant cycle runs (claims daily/random grants)
+- `automation.reusePersistentSession: true` — keeps the live session alive for reads (no per-cycle logout)
 - AgentRouter full checks always run headed Google Chrome Stable under Xvfb; there is no headless setting
+- Full browser login/logout happens only on the grant cycle (grantIntervalHours) or a session-heal; reads reuse the captured session
 - `automation.runOnStart: false` — prevents immediate check burst on service boot
 
 ### Step 6: Install accounts file
