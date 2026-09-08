@@ -28,6 +28,8 @@ type WorkerPayload = {
     authChallengeTimeoutMs: number;
     captureScreenshots: boolean;
     activityLookbackDays: number;
+    grantMode: boolean;
+    reusePersistentSession: boolean;
   };
 };
 
@@ -47,6 +49,7 @@ export interface WorkerProgress {
 interface RunSingleAccountOptions {
   signal?: AbortSignal;
   onProgress?: (progress: WorkerProgress) => void;
+  grantMode?: boolean;
 }
 
 function parseWorkerMessage(line: string): WorkerMessage {
@@ -91,6 +94,8 @@ export async function runSingleAccountCheck(
       authChallengeTimeoutMs: settings.twoFactorTimeoutMinutes * 60_000,
       captureScreenshots: settings.captureScreenshots,
       activityLookbackDays: settings.activityLookbackDays,
+      grantMode: options.grantMode === true,
+      reusePersistentSession: settings.reusePersistentSession,
     },
   };
 

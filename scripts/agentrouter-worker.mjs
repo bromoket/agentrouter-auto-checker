@@ -12,6 +12,7 @@ import {
   parseLabeledNumber,
 } from "./agentrouter-money.mjs";
 import { connectNativeChrome } from "./native-chrome-client.mjs";
+import { shouldLogout } from "./agentrouter-worker-mode.mjs";
 
 const USAGE_WINDOWS = [
   { granularity: "hour", seconds: 24 * 60 * 60 },
@@ -1817,21 +1818,33 @@ async function runWorker({ account, config }) {
       result.apiCalls,
     ) ?? undefined;
 
-    progress(
-      "logging-out",
-      "Data captured. Logging out so the next scheduled sign-in can claim available grants.",
-      92,
-    );
-    result.loggedOut = await logoutAndPersist(
-      context,
-      activePage,
-      config,
-      authenticatedUserId,
-      statePath,
-      result.apiCalls,
-    );
-    if (!result.loggedOut) {
-      throw new Error("AgentRouter logout did not complete after data collection.");
+    if (shouldLogout({
+      grantMode: config.grantMode === true,
+      reusePersistentSession: config.reusePersistentSession,
+    })) {
+      progress(
+        "logging-out",
+        "Data captured. Logging out (grant cycle) so the next sign-in can claim available grants.",
+        92,
+      );
+      result.loggedOut = await logoutAndPersist(
+        context,
+        activePage,
+        config,
+        authenticatedUserId,
+        statePath,
+        result.apiCalls,
+      );
+      if (!result.loggedOut) {
+        throw new Error("AgentRouter logout did not complete after data collection.");
+      }
+    } else {
+      result.loggedOut = false;
+      progress(
+        "persisted",
+        "Data captured. Keeping the live session for the next read.",
+        92,
+      );
     }
     try {
       await unlink(monitorStatePath);
