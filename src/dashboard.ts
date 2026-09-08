@@ -7,9 +7,11 @@ import { isBoundedJsonError, readBoundedJsonObject } from "./bounded-json";
 import { AuthenticationChallengeBroker } from "./challenges";
 import type { AppConfig } from "./config";
 import { handleAntigravityApi } from "./antigravity/api";
+import { handleCommandCodeApi } from "./commandcode/api";
 import { CheckCoordinator } from "./coordinator";
 import { handleObservatoryApi } from "./observatory/api";
 import type { AntigravityApiContext } from "./antigravity/api";
+import type { CommandCodeApiContext } from "./commandcode/api";
 import type { ObservatoryCoordinator } from "./observatory/coordinator";
 import type { ObservatoryStore } from "./observatory/store";
 import {
@@ -151,6 +153,7 @@ export function startDashboard(
     coordinator: ObservatoryCoordinator;
   } | null,
   antigravityContext?: AntigravityApiContext | null,
+  commandcodeContext?: CommandCodeApiContext | null,
 ) {
   if (config.observatory.enabled && !config.dashboardAuth.enabled) {
     throw new Error("Observatory dashboard requires enabled API key session authentication.");
@@ -266,6 +269,16 @@ export function startDashboard(
         }
         if (method === "GET" && url.pathname === "/dashboard.js") {
           return serveFile(join(WEB_ROOT, "dashboard.js"));
+        }
+        if (url.pathname.startsWith("/api/commandcode/")) {
+          if (!commandcodeContext) {
+            return errorResponse("Command Code monitoring is disabled.", 404);
+          }
+          const commandcodeResponse = await handleCommandCodeApi(request, url, method, commandcodeContext);
+          if (commandcodeResponse) {
+            return commandcodeResponse;
+          }
+          return errorResponse("Command Code API route not found.", 404);
         }
         if (method === "GET" && url.pathname === "/antigravity.css") {
           return serveFile(join(WEB_ROOT, "antigravity.css"));

@@ -401,3 +401,48 @@ describe("loadConfig dashboard API key auth controls", () => {
     }
   });
 });
+
+describe("loadConfig Command Code controls", () => {
+  function enableObservatory() {
+    process.env.OBSERVATORY_ENABLED = "true";
+    process.env.OBSERVATORY_HMAC_KEY = "a".repeat(32);
+    process.env.OBSERVATORY_OMP_EXECUTABLE = process.platform === "win32" ? "C:\\opt\\omp.cmd" : "/opt/omp";
+    process.env.OBSERVATORY_OMP_VERSION = "18.0.11";
+    process.env.DASHBOARD_API_KEY = "k".repeat(32);
+    process.env.DASHBOARD_ALLOWED_ORIGINS = "https://bkserver.tailbbaa91.ts.net";
+    process.env.OMP_QUOTA_ENABLED = "false";
+    process.env.OMP_AUTH_BROKER_URL = "http://127.0.0.1:8765";
+    process.env.OMP_AUTH_BROKER_TOKEN = "broker-token";
+  }
+
+  test("disables Command Code by default", () => {
+    delete process.env.COMMANDCODE_ENABLED;
+    const config = loadConfig();
+    expect(config.commandcode.enabled).toBe(false);
+    expect(config.commandcode.encryptionKey).toBeNull();
+  });
+
+  test("requires encryption key when enabled", () => {
+    enableObservatory();
+    process.env.COMMANDCODE_ENABLED = "true";
+    delete process.env.COMMANDCODE_ENC_KEY;
+    expect(() => loadConfig()).toThrow("COMMANDCODE_ENC_KEY is required");
+
+    process.env.COMMANDCODE_ENC_KEY = "a".repeat(32);
+    const config = loadConfig();
+    expect(config.commandcode.enabled).toBe(true);
+    expect(config.commandcode.probeIntervalMinutes).toBe(5);
+  });
+
+  test("defaults probe interval and timeout bounds", () => {
+    enableObservatory();
+    process.env.COMMANDCODE_ENABLED = "true";
+    process.env.COMMANDCODE_ENC_KEY = "a".repeat(32);
+    process.env.COMMANDCODE_PROBE_INTERVAL_MINUTES = "5000";
+    const config = loadConfig();
+    expect(config.commandcode.probeIntervalMinutes).toBe(5);
+    process.env.COMMANDCODE_PROBE_INTERVAL_MINUTES = "10";
+    const configTen = loadConfig();
+    expect(configTen.commandcode.probeIntervalMinutes).toBe(10);
+  });
+});

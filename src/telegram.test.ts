@@ -78,6 +78,13 @@ function config(stateFilePath: string, overrides: Partial<AppConfig["telegram"]>
       oauthClientSecret: null,
       oauthRedirectUri: "http://localhost:51121/oauth-callback",
     },
+    commandcode: {
+      enabled: false,
+      dbPath: ":memory:",
+      encryptionKey: null,
+      probeIntervalMinutes: 5,
+      probeTimeoutMs: 30_000,
+    },
     maxRecentRuns: 500,
     ompQuota: {
       enabled: false,

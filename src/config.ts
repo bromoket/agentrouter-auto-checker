@@ -31,6 +31,7 @@ export interface AppConfig {
   ompQuota: OmpQuotaConfig;
   observatory: ObservatoryConfig;
   antigravity: AntigravityConfig;
+  commandcode: CommandCodeConfig;
   collector: CollectorConfig;
   dashboardAuth: DashboardAuth;
 }
@@ -72,6 +73,14 @@ export interface AntigravityConfig {
   oauthClientId: string;
   oauthClientSecret: string | null;
   oauthRedirectUri: string;
+}
+
+export interface CommandCodeConfig {
+  enabled: boolean;
+  dbPath: string;
+  encryptionKey: string | null;
+  probeIntervalMinutes: number;
+  probeTimeoutMs: number;
 }
 
 export interface OmpQuotaConfig {
@@ -493,6 +502,43 @@ function loadAntigravityConfig(
   };
 }
 
+function loadCommandCodeConfig(
+  dataDir: string,
+  observatory: ObservatoryConfig,
+  agentRouterDbPath: string,
+): CommandCodeConfig {
+  const enabled = parseBoolean("COMMANDCODE_ENABLED", false);
+  const rawDbPath = process.env.COMMANDCODE_DB_PATH?.trim();
+  const dbPath = rawDbPath || dataDir + "/commandcode.sqlite";
+  const encryptionKey = process.env.COMMANDCODE_ENC_KEY?.trim() || null;
+  if (enabled) {
+    if (!observatory.enabled) {
+      throw new Error("Command Code monitoring requires Observatory to be enabled.");
+    }
+    if (!encryptionKey) {
+      throw new Error("COMMANDCODE_ENC_KEY is required when Command Code monitoring is enabled.");
+    }
+    if (!(Buffer.byteLength(encryptionKey, "utf8") >= 32)) {
+      throw new Error("COMMANDCODE_ENC_KEY must be at least 32 bytes (or use base64: prefix with a 32-byte key).");
+    }
+    if (dbPath !== ":memory:") {
+      if (dbPath === observatory.dbPath) {
+        throw new Error("COMMANDCODE_DB_PATH must be separate from OBSERVATORY_DB_PATH.");
+      }
+      if (dbPath === agentRouterDbPath) {
+        throw new Error("COMMANDCODE_DB_PATH must be separate from the AgentRouter DB path.");
+      }
+    }
+  }
+  return {
+    enabled,
+    dbPath,
+    encryptionKey,
+    probeIntervalMinutes: parseBoundedInteger("COMMANDCODE_PROBE_INTERVAL_MINUTES", 5, 1, 1440),
+    probeTimeoutMs: parseBoundedInteger("COMMANDCODE_PROBE_TIMEOUT_MS", 30_000, 1_000, 120_000),
+  };
+}
+
 function parseRequiredBoundedInteger(
   name: string,
   fallback: number,
@@ -619,6 +665,7 @@ export function loadConfig(): AppConfig {
   const ompQuota = loadOmpQuotaConfig(dataDir);
   const observatory = loadObservatoryConfig(dataDir, ompQuota, dbPath);
   const antigravity = loadAntigravityConfig(dataDir, observatory, dbPath);
+  const commandcode = loadCommandCodeConfig(dataDir, observatory, dbPath);
   const collector = loadCollectorConfig();
   const nativeBrowser = loadNativeBrowserConfig(
     dataDir,
@@ -668,6 +715,7 @@ export function loadConfig(): AppConfig {
     ompQuota,
     observatory,
     antigravity,
+    commandcode,
     collector,
     dashboardAuth,
   };

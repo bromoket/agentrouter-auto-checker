@@ -13,6 +13,8 @@ import { loadConfig } from "./config";
 import { CheckCoordinator } from "./coordinator";
 import { AntigravityCollector } from "./antigravity/collector";
 import { AntigravityStore } from "./antigravity/store";
+import { CommandCodeCollector } from "./commandcode/collector";
+import { CommandCodeStore } from "./commandcode/store";
 import { startDashboard } from "./dashboard";
 import { ObservatoryCoordinator } from "./observatory/coordinator";
 import { ObservatoryStore } from "./observatory/store";
@@ -163,6 +165,39 @@ async function main(): Promise<void> {
     console.log("antigravity: direct account probing enabled");
   }
 
+  let commandcodeStore: CommandCodeStore | null = null;
+  let commandcodeCollector: CommandCodeCollector | null = null;
+  if (config.commandcode.enabled && observatoryCoordinator && config.commandcode.encryptionKey) {
+    commandcodeStore = new CommandCodeStore(config.commandcode.dbPath, config.commandcode.encryptionKey);
+    commandcodeCollector = new CommandCodeCollector({
+      store: commandcodeStore,
+      sink: {
+        ingestBatch: async (observedAt, identities, quotas) => {
+          await observatoryCoordinator.ingestBatch({
+            observedAt,
+            host: {
+              hostId: config.observatory.sourceHostId,
+              operatorLabel: "Command Code Node",
+              platform: process.platform,
+              collectorVersion: "commandcode-direct",
+              lastSeenAt: observedAt,
+              status: "online",
+            },
+            identities,
+            quotas,
+          });
+        },
+        emitEvent: (candidate) => {
+          observatoryCoordinator.processEventCandidate(candidate);
+        },
+      },
+      probeIntervalMs: config.commandcode.probeIntervalMinutes * 60_000,
+      probeTimeoutMs: config.commandcode.probeTimeoutMs,
+      sourceHostId: config.observatory.sourceHostId,
+    });
+    console.log("commandcode: subscription quota monitoring enabled");
+  }
+
   const retention = new ScreenshotRetentionManager({
     screenshotDir: config.screenshotDir,
   });
@@ -199,6 +234,7 @@ async function main(): Promise<void> {
     store.close();
     observatoryStore?.close();
     antigravityStore?.close();
+    commandcodeStore?.close();
     return;
   }
 
@@ -209,6 +245,10 @@ async function main(): Promise<void> {
   const antigravityContext =
     antigravityStore && antigravityCollector && config.antigravity.enabled
       ? { store: antigravityStore, collector: antigravityCollector, config }
+      : null;
+  const commandcodeContext =
+    commandcodeStore && commandcodeCollector && config.commandcode.enabled
+      ? { store: commandcodeStore, collector: commandcodeCollector, config }
       : null;
   const collectorServer = config.collector.enabled && observatoryStore
     ? await startCollectorListener(config, observatoryStore)
@@ -235,6 +275,7 @@ async function main(): Promise<void> {
     config,
     observatoryContext,
     antigravityContext,
+    commandcodeContext,
   );
   console.log(`dashboard: ${server.url}`);
   const automation = await settings.load();
@@ -252,12 +293,14 @@ async function main(): Promise<void> {
     closing = true;
     coordinator.stopScheduler();
     antigravityCollector?.stop();
+    commandcodeCollector?.stop();
     await stopTelegramCommands?.();
     collectorServer?.close();
     server.stop(true);
     await retention.close();
     observatoryStore?.close();
     antigravityStore?.close();
+    commandcodeStore?.close();
     store.close();
   };
   process.once("SIGINT", () => void shutdown());

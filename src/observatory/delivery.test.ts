@@ -62,6 +62,13 @@ function createTestConfig(dataDir: string): AppConfig {
       oauthClientSecret: null,
       oauthRedirectUri: "http://localhost:51121/oauth-callback",
     },
+    commandcode: {
+      enabled: false,
+      dbPath: ":memory:",
+      encryptionKey: null,
+      probeIntervalMinutes: 5,
+      probeTimeoutMs: 30_000,
+    },
     maxRecentRuns: 500,
     telegram: {
       botToken: `12345678:${"A".repeat(40)}`,
