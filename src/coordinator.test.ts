@@ -259,4 +259,49 @@ describe("ObservatoryCoordinator probe failure isolation and run ingestion", () 
     expect(obsStore.listCurrentQuotaWindows()).toHaveLength(1);
     obsStore.close();
   });
+
+  test("emits agentrouter_grant_received on a balance increase, not a drop", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "coordinator-grant-test-"));
+    temporaryDirectories.push(dir);
+    const config = createTestConfig(dir, false, true);
+    const obsStore = new ObservatoryStore(":memory:");
+    const obsCoordinator = new ObservatoryCoordinator(obsStore, config, null, async () => ({
+      observedAt: new Date().toISOString(),
+      identities: [],
+      quotas: [],
+      capacity: null,
+      stats: { totalReports: 0, totalLimits: 0, totalIdentities: 0, totalDisabled: 0, totalWithoutUsage: 0 },
+    }));
+
+    const run = (balance: number, endedAt: string) => ({
+      accountId: "acc-1",
+      accountLabel: "Acc 1",
+      startedAt: new Date(Date.parse(endedAt) - 1000).toISOString(),
+      endedAt,
+      status: "ok" as const,
+      loginMs: 1,
+      dashboardMs: 1,
+      totalMs: 2,
+      summary: {},
+      metrics: { balance, consumed: 0, requestCount: 0, quotaPerUnit: 500000 },
+      usagePoints: [],
+      apiCalls: [],
+      loggedOut: false,
+      sessionReused: true,
+    });
+
+    // Baseline run: balance 100.
+    obsCoordinator.recordAgentRouterRun(run(100, "2026-09-07T10:00:00.000Z") as never, { id: "acc-1", label: "Acc 1" });
+    // Grant: balance rises to 125.
+    obsCoordinator.recordAgentRouterRun(run(125, "2026-09-07T10:05:00.000Z") as never, { id: "acc-1", label: "Acc 1" });
+
+    const grantEvents = obsStore.listEvents({ eventType: "agentrouter_grant_received" });
+    expect(grantEvents.length).toBeGreaterThanOrEqual(1);
+
+    // A later drop is not a grant.
+    obsCoordinator.recordAgentRouterRun(run(99, "2026-09-07T10:10:00.000Z") as never, { id: "acc-1", label: "Acc 1" });
+    const afterDrop = obsStore.listEvents({ eventType: "agentrouter_grant_received" });
+    expect(afterDrop.length).toBe(grantEvents.length);
+    obsStore.close();
+  });
 });
