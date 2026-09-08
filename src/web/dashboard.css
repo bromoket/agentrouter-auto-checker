@@ -64,6 +64,14 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
 .button.ghost { background: transparent; }
 .button.large { min-height: 50px; padding-inline: 21px; border-radius: 15px; }
 .button.icon-only { width: 42px; padding: 0; font-size: 18px; }
+/* Panel action buttons (Antigravity, Command Code views) use `.btn`; alias to `.button` variants. */
+.btn { appearance: none; border: 1px solid var(--line); background: rgba(255,255,255,.035); border-radius: 12px; cursor: pointer; transition: border-color .2s, transform .2s, background .2s, box-shadow .2s; min-height: 40px; padding: 0 16px; font-weight: 750; letter-spacing: -.015em; }
+.btn:hover { transform: translateY(-2px); border-color: rgba(216,180,254,.55); background: rgba(168,85,247,.1); }
+.btn:disabled { opacity: .45; cursor: wait; transform: none; }
+.btn.primary { border: 0; background: var(--gradient); box-shadow: 0 12px 32px rgba(126,34,206,.32); }
+.btn.secondary { background: rgba(139,92,246,.12); border-color: rgba(168,85,247,.35); }
+.btn.ghost { background: transparent; }
+.btn.danger { color: #fecdd3; border-color: rgba(251,113,133,.28); background: rgba(251,113,133,.08); }
 .ui-icon { width: 18px; height: 18px; display: block; margin: auto; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .danger-button { color: #fecdd3; border-color: rgba(251,113,133,.28); background: rgba(251,113,133,.08); }
 .status-chip, .live-pill { display: inline-flex; align-items: center; gap: 8px; width: max-content; border: 1px solid var(--line); border-radius: 999px; padding: 8px 12px; color: #c4b5fd; background: rgba(139,92,246,.08); font-size: 12px; white-space: nowrap; }
